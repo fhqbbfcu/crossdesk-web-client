@@ -34,18 +34,27 @@
       this.dataChannel = null;
       this.elements = {
         video: document.getElementById("video"),
-        dataLog: document.getElementById("data-channel"),
         mediaContainer: document.getElementById("media"),
         videoContainer: document.getElementById("video-container"),
         virtualMouse: document.getElementById("virtual-mouse"),
+        virtualMouseHeader: document.getElementById("virtual-mouse-header"),
         virtualLeftBtn: document.getElementById("virtual-left-btn"),
         virtualRightBtn: document.getElementById("virtual-right-btn"),
-        virtualWheel: document.getElementById("virtual-wheel"),
+        virtualScrollUp: document.getElementById("virtual-scroll-up"),
+        virtualScrollDown: document.getElementById("virtual-scroll-down"),
         virtualTouchpad: null,
         virtualDragHandle: document.getElementById("virtual-mouse-drag-handle"),
         mobileModeSelector: document.getElementById("mobile-mode-selector"),
         mouseControlMode: document.getElementById("mouse-control-mode"),
+        virtualKeyboard: document.getElementById("virtual-keyboard"),
+        keyboardHeader: document.getElementById("keyboard-header"),
+        keyboardToggleMouse: document.getElementById("keyboard-toggle-mouse"),
+        keyboardToggle: document.getElementById("keyboard-toggle"),
+        keyboardClose: document.getElementById("keyboard-close"),
       };
+
+      this.virtualKeyTimers = new Map(); // Store timers for each key element
+      this.virtualScrollTimers = new Map(); // Store timers for scroll buttons
 
       this.state = {
         pointerLocked: false,
@@ -55,6 +64,9 @@
         touchpadStart: null,
         draggingVirtualMouse: false,
         dragOffset: { x: 0, y: 0 },
+        draggingVirtualKeyboard: false,
+        keyboardDragOffset: { x: 0, y: 0 },
+        draggingPanel: false, // Track if status panel is being dragged
         pointerLockToastTimer: null,
         videoRect: null,
         gestureActive: false,
@@ -65,9 +77,19 @@
         touchActive: false,
         touchStartPos: null,
         touchLastPos: null,
+        // Pinch zoom state
+        pinchZoomActive: false,
+        initialPinchDistance: 0,
+        initialScale: 1.0,
+        currentScale: 1.0,
+        lastDoubleTapTime: 0,
+        // Pan state (for dragging zoomed image)
+        initialPinchCenter: null,
+        initialTranslateX: 0,
+        initialTranslateY: 0,
+        currentTranslateX: 0,
+        currentTranslateY: 0,
       };
-
-      this.virtualWheelTimer = null;
 
       this.onPointerLockChange = this.onPointerLockChange.bind(this);
       this.onPointerLockError = this.onPointerLockError.bind(this);
@@ -80,9 +102,6 @@
       this.onTouchStartFallback = this.onTouchStartFallback.bind(this);
       this.onTouchMoveFallback = this.onTouchMoveFallback.bind(this);
       this.onTouchEndFallback = this.onTouchEndFallback.bind(this);
-
-      this.onVirtualWheelStart = this.onVirtualWheelStart.bind(this);
-      this.onVirtualWheelEnd = this.onVirtualWheelEnd.bind(this);
       this.onVirtualLeftStart = this.onVirtualLeftStart.bind(this);
       this.onVirtualRightStart = this.onVirtualRightStart.bind(this);
       this.onVirtualButtonMove = this.onVirtualButtonMove.bind(this);
@@ -92,6 +111,14 @@
       this.onDragHandleTouchMove = this.onDragHandleTouchMove.bind(this);
       this.onDragHandleTouchEnd = this.onDragHandleTouchEnd.bind(this);
       this.onDragHandleClick = this.onDragHandleClick.bind(this);
+
+      this.onKeyboardDragHandleTouchStart = this.onKeyboardDragHandleTouchStart.bind(this);
+      this.onKeyboardDragHandleTouchMove = this.onKeyboardDragHandleTouchMove.bind(this);
+      this.onKeyboardDragHandleTouchEnd = this.onKeyboardDragHandleTouchEnd.bind(this);
+
+      this.onPinchStart = this.onPinchStart.bind(this);
+      this.onPinchMove = this.onPinchMove.bind(this);
+      this.onPinchEnd = this.onPinchEnd.bind(this);
 
       this.init();
     }
@@ -110,6 +137,7 @@
       this.bindPointerListeners();
       this.bindKeyboardListeners();
       this.setupVirtualMouse();
+      this.setupVirtualKeyboard();
     }
 
     setDataChannel(channel) {
@@ -125,7 +153,6 @@
       try {
         const payload = JSON.stringify(action);
         this.dataChannel.send(payload);
-        this.logDataChannel(payload);
         return true;
       } catch (err) {
         console.error("CrossDeskControl: failed to send action", err);
@@ -134,6 +161,11 @@
     }
 
     sendMouseAction({ x, y, flag, scroll = 0 }) {
+      // Don't send mouse events while dragging UI elements
+      if (this.isDraggingAnyElement()) {
+        return;
+      }
+      
       const numericFlag =
         typeof flag === "string" ? MouseFlag[flag] ?? MouseFlag.move : flag | 0;
 
@@ -181,7 +213,6 @@
       if (!this.isChannelOpen()) return false;
       try {
         this.dataChannel.send(raw);
-        this.logDataChannel(raw);
         return true;
       } catch (err) {
         console.error("CrossDeskControl: failed to send raw message", err);
@@ -189,16 +220,6 @@
       }
     }
 
-    logDataChannel(text) {
-      const dataLog = document.getElementById("data-channel");
-      if (!dataLog) return;
-      // Only log if debug mode is enabled
-      const debugMode = localStorage.getItem("crossdesk-debug") === "true";
-      if (debugMode) {
-      dataLog.textContent += `> ${text}\n`;
-      dataLog.scrollTop = dataLog.scrollHeight;
-      }
-    }
 
     bindPointerLockEvents() {
       document.addEventListener("pointerlockchange", this.onPointerLockChange);
@@ -220,12 +241,6 @@
           "已退出鼠标锁定，按 Esc 或点击视频重新锁定（释放可按 Ctrl+Esc）",
           3000
         );
-      }
-      if (this.elements.dataLog) {
-        this.elements.dataLog.textContent += `[pointerlock ${
-          this.state.pointerLocked ? "entered" : "exited"
-        }]\n`;
-        this.elements.dataLog.scrollTop = this.elements.dataLog.scrollHeight;
       }
     }
 
@@ -267,14 +282,28 @@
           passive: false,
         });
       }
+
+      // Pinch zoom will be set up in setupVirtualMouse() after isMobile is determined
     }
 
     onPointerDown(event) {
       const button = typeof event.button === "number" ? event.button : 0;
       if (button < 0) return;
       
+      // Skip if touching panel elements
+      const target = event.target;
+      if (target && (target.closest("#panel-collapsed-bar") || target.closest("#connected-panel"))) {
+        return;
+      }
+      
+      // Skip if dragging panel
+      if (this.state.draggingPanel) {
+        return;
+      }
+      
       // 移动端模式下，触摸视频区域不触发点击事件，只移动鼠标位置
-      if (this.state.isMobile && event.pointerType === "touch") {
+      // Skip if pinch zoom is active
+      if (this.state.isMobile && event.pointerType === "touch" && !this.state.pinchZoomActive) {
         event.preventDefault?.();
         this.ensureVideoRect();
         if (this.state.videoRect && this.isInsideVideo(event.clientX, event.clientY)) {
@@ -315,6 +344,22 @@
     }
 
     onPointerMove(event) {
+      // Skip if touching panel elements
+      const target = event.target;
+      if (target && (target.closest("#panel-collapsed-bar") || target.closest("#connected-panel"))) {
+        return;
+      }
+      
+      // Skip if dragging panel
+      if (this.state.draggingPanel) {
+        return;
+      }
+      
+      // Skip if pinch zoom is active
+      if (this.state.pinchZoomActive) {
+        return;
+      }
+      
       // 移动端增量模式处理
       if (this.state.isMobile && event.pointerType === "touch" && this.state.touchActive && this.state.mobileControlMode === "relative") {
         event.preventDefault?.();
@@ -462,6 +507,18 @@
 
     onTouchStartFallback(event) {
       if (!event.touches?.length) return;
+      
+      // Skip if touching panel elements
+      const target = event.target;
+      if (target && (target.closest("#panel-collapsed-bar") || target.closest("#connected-panel"))) {
+        return;
+      }
+      
+      // Skip if pinch zoom is active, dragging panel, or if two touches (pinch gesture)
+      if (this.state.pinchZoomActive || this.state.draggingPanel || event.touches.length === 2) {
+        return;
+      }
+      
       const touch = event.touches[0];
       event.preventDefault();
       
@@ -487,6 +544,18 @@
 
     onTouchMoveFallback(event) {
       if (!event.touches?.length) return;
+      
+      // Skip if touching panel elements
+      const target = event.target;
+      if (target && (target.closest("#panel-collapsed-bar") || target.closest("#connected-panel"))) {
+        return;
+      }
+      
+      // Skip if pinch zoom is active, dragging panel, or if two touches (pinch gesture)
+      if (this.state.pinchZoomActive || this.state.draggingPanel || event.touches.length === 2) {
+        return;
+      }
+      
       const touch = event.touches[0];
       event.preventDefault();
       
@@ -625,46 +694,303 @@
       document.addEventListener("touchend", this.onVirtualButtonEnd, { passive: false });
       document.addEventListener("touchcancel", this.onVirtualButtonEnd, { passive: false });
 
-      this.elements.virtualWheel?.addEventListener(
-        "touchstart",
-        this.onVirtualWheelStart,
-        { passive: false }
-      );
-      this.elements.virtualWheel?.addEventListener(
-        "touchend",
-        this.onVirtualWheelEnd,
-        { passive: false }
-      );
-      this.elements.virtualWheel?.addEventListener(
-        "touchcancel",
-        this.onVirtualWheelEnd,
-        { passive: false }
-      );
+      // Scroll up button with long-press support
+      if (this.elements.virtualScrollUp) {
+        const handleScrollUpDown = (e) => {
+          e.preventDefault();
+          this.handleVirtualScrollPress(this.elements.virtualScrollUp, "up", true);
+        };
+        const handleScrollUpUp = (e) => {
+          e.preventDefault();
+          this.handleVirtualScrollPress(this.elements.virtualScrollUp, "up", false);
+        };
+        
+        this.elements.virtualScrollUp.addEventListener("mousedown", handleScrollUpDown, { passive: false });
+        this.elements.virtualScrollUp.addEventListener("mouseup", handleScrollUpUp, { passive: false });
+        this.elements.virtualScrollUp.addEventListener("mouseleave", handleScrollUpUp, { passive: false });
+        this.elements.virtualScrollUp.addEventListener("touchstart", handleScrollUpDown, { passive: false });
+        this.elements.virtualScrollUp.addEventListener("touchend", handleScrollUpUp, { passive: false });
+        this.elements.virtualScrollUp.addEventListener("touchcancel", handleScrollUpUp, { passive: false });
+      }
+      
+      // Scroll down button with long-press support
+      if (this.elements.virtualScrollDown) {
+        const handleScrollDownDown = (e) => {
+          e.preventDefault();
+          this.handleVirtualScrollPress(this.elements.virtualScrollDown, "down", true);
+        };
+        const handleScrollDownUp = (e) => {
+          e.preventDefault();
+          this.handleVirtualScrollPress(this.elements.virtualScrollDown, "down", false);
+        };
+        
+        this.elements.virtualScrollDown.addEventListener("mousedown", handleScrollDownDown, { passive: false });
+        this.elements.virtualScrollDown.addEventListener("mouseup", handleScrollDownUp, { passive: false });
+        this.elements.virtualScrollDown.addEventListener("mouseleave", handleScrollDownUp, { passive: false });
+        this.elements.virtualScrollDown.addEventListener("touchstart", handleScrollDownDown, { passive: false });
+        this.elements.virtualScrollDown.addEventListener("touchend", handleScrollDownUp, { passive: false });
+        this.elements.virtualScrollDown.addEventListener("touchcancel", handleScrollDownUp, { passive: false });
+      }
 
       this.bindVirtualMouseDragging();
-    }
+      this.bindVirtualKeyboardDragging();
 
-    onVirtualWheelStart(event) {
-      event.preventDefault();
-      this.emitVirtualWheel();
-      this.virtualWheelTimer = setInterval(() => this.emitVirtualWheel(), 100);
-    }
-
-    onVirtualWheelEnd(event) {
-      event.preventDefault();
-      if (this.virtualWheelTimer) {
-        clearInterval(this.virtualWheelTimer);
-        this.virtualWheelTimer = null;
+      // Add pinch zoom support for mobile devices (after isMobile is set)
+      if (this.state.isMobile && this.elements.video) {
+        const video = this.elements.video;
+        video.addEventListener("touchstart", this.onPinchStart, {
+          passive: false,
+        });
+        document.addEventListener("touchmove", this.onPinchMove, {
+          passive: false,
+        });
+        document.addEventListener("touchend", this.onPinchEnd, {
+          passive: false,
+        });
+        document.addEventListener("touchcancel", this.onPinchEnd, {
+          passive: false,
+        });
       }
     }
 
-    emitVirtualWheel() {
+    setupVirtualKeyboard() {
+      const isDesktop = window.matchMedia(
+        "(hover: hover) and (pointer: fine)"
+      ).matches;
+
+      // Only show virtual keyboard on mobile devices
+      if (isDesktop) {
+        if (this.elements.virtualKeyboard) {
+          this.elements.virtualKeyboard.style.display = "none";
+        }
+        // Keep keyboard toggle button visible in panel even on desktop
+        // Don't hide it, and don't return early so button setup continues
+      }
+
+      // Show keyboard toggle button on virtual mouse (always visible in panel)
+      if (this.elements.keyboardToggleMouse) {
+        this.elements.keyboardToggleMouse.style.display = "block";
+        this.elements.keyboardToggleMouse.addEventListener("click", () => {
+          this.toggleVirtualKeyboard();
+        });
+      }
+
+      // Keyboard header buttons
+      if (this.elements.keyboardToggle) {
+        this.elements.keyboardToggle.addEventListener("click", () => {
+          this.toggleVirtualKeyboard();
+        });
+      }
+
+      if (this.elements.keyboardClose) {
+        this.elements.keyboardClose.addEventListener("click", () => {
+          this.hideVirtualKeyboard();
+        });
+      }
+
+      // Bind keyboard key events
+      const keyboardKeys = document.querySelectorAll(".keyboard-key");
+      keyboardKeys.forEach((key) => {
+        const handleKeyDown = (e) => {
+          e.preventDefault();
+          this.handleVirtualKeyPress(key, true);
+        };
+        const handleKeyUp = (e) => {
+          e.preventDefault();
+          this.handleVirtualKeyPress(key, false);
+          // Remove focus after a short delay to ensure it happens after all event handlers
+          setTimeout(() => {
+            if (document.activeElement === key) {
+              key.blur();
+            }
+            // Force remove any inline styles that might persist
+            key.style.backgroundColor = "";
+            key.style.transform = "";
+            key.style.boxShadow = "";
+          }, 0);
+        };
+        
+        key.addEventListener("mousedown", handleKeyDown);
+        key.addEventListener("mouseup", handleKeyUp);
+        key.addEventListener("mouseleave", handleKeyUp);
+        key.addEventListener("touchstart", handleKeyDown, { passive: false });
+        key.addEventListener("touchend", handleKeyUp, { passive: false });
+        key.addEventListener("touchcancel", handleKeyUp, { passive: false });
+        
+        // Store key element reference for cleanup
+        key._keyboardKeyRef = key;
+      });
+    }
+
+    toggleVirtualKeyboard() {
+      if (!this.elements.virtualKeyboard) return;
+      const isVisible = this.elements.virtualKeyboard.style.display !== "none";
+      if (isVisible) {
+        this.hideVirtualKeyboard();
+      } else {
+        this.showVirtualKeyboard();
+      }
+    }
+
+    showVirtualKeyboard() {
+      if (!this.elements.virtualKeyboard) return;
+      this.elements.virtualKeyboard.style.display = "block";
+    }
+
+    hideVirtualKeyboard() {
+      if (!this.elements.virtualKeyboard) return;
+      this.elements.virtualKeyboard.style.display = "none";
+    }
+
+    handleVirtualKeyPress(keyElement, isDown) {
+      if (!this.isChannelOpen()) return;
+      const keyCode = parseInt(keyElement.getAttribute("data-keycode"), 10);
+      if (isNaN(keyCode)) return;
+
+      if (isDown) {
+        // Clear any existing timer for this key
+        this.stopVirtualKeyRepeat(keyElement);
+        
+        // Send initial keydown
+        this.sendKeyboardAction(keyCode, true);
+        
+        // Visual feedback - pressed state
+        keyElement.style.backgroundColor = "rgba(180, 180, 180, 0.95)";
+        keyElement.style.transform = "scale(0.92)";
+        keyElement.style.boxShadow = "0 1px 2px rgba(0, 0, 0, 0.3)";
+        
+        // Store timer info for this key
+        const timerInfo = {
+          longPressTimer: null,
+          repeatTimer: null
+        };
+        
+        // Set up long press detection
+        timerInfo.longPressTimer = setTimeout(() => {
+          // After 300ms, start repeating
+          timerInfo.repeatTimer = setInterval(() => {
+            if (this.isChannelOpen()) {
+              this.sendKeyboardAction(keyCode, true);
+              // Send keyup immediately after keydown for repeat
+              setTimeout(() => {
+                this.sendKeyboardAction(keyCode, false);
+              }, 30);
+            }
+          }, 100); // Repeat every 100ms
+        }, 300); // Long press threshold: 300ms
+        
+        this.virtualKeyTimers.set(keyElement, timerInfo);
+      } else {
+        // Stop repeating
+        this.stopVirtualKeyRepeat(keyElement);
+        
+        // Send keyup
+        this.sendKeyboardAction(keyCode, false);
+        
+        // Visual feedback - released state - clear inline styles to restore CSS
+        // Use setTimeout to ensure this happens after browser default styles are applied
+        setTimeout(() => {
+          // Remove focus to prevent browser default focus styles
+          if (document.activeElement === keyElement) {
+            keyElement.blur();
+      }
+          // Force clear all inline styles
+          keyElement.style.backgroundColor = "";
+          keyElement.style.transform = "";
+          keyElement.style.boxShadow = "";
+          keyElement.style.outline = "";
+        }, 0);
+      }
+    }
+
+    stopVirtualKeyRepeat(keyElement) {
+      const timerInfo = this.virtualKeyTimers.get(keyElement);
+      if (timerInfo) {
+        if (timerInfo.longPressTimer) {
+          clearTimeout(timerInfo.longPressTimer);
+        }
+        if (timerInfo.repeatTimer) {
+          clearInterval(timerInfo.repeatTimer);
+        }
+        this.virtualKeyTimers.delete(keyElement);
+      }
+    }
+
+    emitVirtualWheel(direction = "up") {
+      // direction: "up" or "down"
+      // Up scroll: negative value (scroll up)
+      // Down scroll: positive value (scroll down)
+      const scrollValue = direction === "up" ? -1 : 1;
       this.sendMouseAction({
         x: this.state.normalizedPos.x,
         y: this.state.normalizedPos.y,
         flag: MouseFlag.wheel_vertical,
-        scroll: -20,
+        scroll: scrollValue,
       });
+    }
+
+    handleVirtualScrollPress(buttonElement, direction, isDown) {
+      if (!this.isChannelOpen()) return;
+      
+      if (isDown) {
+        // Clear any existing timer for this button
+        this.stopVirtualScrollRepeat(buttonElement);
+        
+        // Send initial scroll
+        this.emitVirtualWheel(direction);
+        
+        // Visual feedback - pressed state
+        buttonElement.style.backgroundColor = "rgba(180, 180, 180, 0.95)";
+        buttonElement.style.transform = "scale(0.92)";
+        buttonElement.style.boxShadow = "0 1px 2px rgba(0, 0, 0, 0.3)";
+        
+        // Store timer info for this button
+        const timerInfo = {
+          longPressTimer: null,
+          repeatTimer: null
+        };
+        
+        // Set up long press detection
+        timerInfo.longPressTimer = setTimeout(() => {
+          // After 300ms, start repeating
+          timerInfo.repeatTimer = setInterval(() => {
+            if (this.isChannelOpen()) {
+              this.emitVirtualWheel(direction);
+            }
+          }, 100); // Repeat every 100ms
+        }, 300); // Long press threshold: 300ms
+        
+        this.virtualScrollTimers.set(buttonElement, timerInfo);
+      } else {
+        // Stop repeating
+        this.stopVirtualScrollRepeat(buttonElement);
+        
+        // Visual feedback - released state - clear inline styles to restore CSS
+        setTimeout(() => {
+          // Remove focus to prevent browser default focus styles
+          if (document.activeElement === buttonElement) {
+            buttonElement.blur();
+          }
+          // Force clear all inline styles
+          buttonElement.style.backgroundColor = "";
+          buttonElement.style.transform = "";
+          buttonElement.style.boxShadow = "";
+          buttonElement.style.outline = "";
+        }, 0);
+      }
+    }
+
+    stopVirtualScrollRepeat(buttonElement) {
+      const timerInfo = this.virtualScrollTimers.get(buttonElement);
+      if (timerInfo) {
+        if (timerInfo.longPressTimer) {
+          clearTimeout(timerInfo.longPressTimer);
+        }
+        if (timerInfo.repeatTimer) {
+          clearInterval(timerInfo.repeatTimer);
+        }
+        this.virtualScrollTimers.delete(buttonElement);
+      }
     }
 
     onVirtualLeftStart(event) {
@@ -741,13 +1067,19 @@
       const upFlag = this.state.gestureButton?.up ?? MouseFlag.left_up;
       this.sendMouseAction({ x: this.state.normalizedPos.x, y: this.state.normalizedPos.y, flag: upFlag });
       
-      // 释放时恢复为白色
+      // 释放时恢复为原始颜色 - 清除内联样式让CSS生效
       if (upFlag === MouseFlag.left_up && this.elements.virtualLeftBtn) {
-        this.elements.virtualLeftBtn.style.backgroundColor = "rgba(255, 255, 255, 0.9)";
-        this.elements.virtualLeftBtn.style.color = "#333";
+        this.elements.virtualLeftBtn.style.backgroundColor = "";
+        this.elements.virtualLeftBtn.style.color = "";
+        if (document.activeElement === this.elements.virtualLeftBtn) {
+          this.elements.virtualLeftBtn.blur();
+        }
       } else if (upFlag === MouseFlag.right_up && this.elements.virtualRightBtn) {
-        this.elements.virtualRightBtn.style.backgroundColor = "rgba(255, 255, 255, 0.9)";
-        this.elements.virtualRightBtn.style.color = "#333";
+        this.elements.virtualRightBtn.style.backgroundColor = "";
+        this.elements.virtualRightBtn.style.color = "";
+        if (document.activeElement === this.elements.virtualRightBtn) {
+          this.elements.virtualRightBtn.blur();
+        }
       }
       
       this.state.gestureActive = false;
@@ -756,13 +1088,12 @@
     }
 
     bindVirtualMouseDragging() {
-      const { virtualMouse, virtualDragHandle, videoContainer } = this.elements;
-      if (!virtualMouse || !virtualDragHandle || !videoContainer) return;
+      const { virtualMouse, virtualMouseHeader, videoContainer } = this.elements;
+      if (!virtualMouse || !virtualMouseHeader || !videoContainer) return;
 
-      virtualDragHandle.addEventListener("touchstart", this.onDragHandleTouchStart, {
+      virtualMouseHeader.addEventListener("touchstart", this.onDragHandleTouchStart, {
         passive: false,
       });
-      virtualDragHandle.addEventListener("click", this.onDragHandleClick);
       document.addEventListener("touchmove", this.onDragHandleTouchMove, {
         passive: false,
       });
@@ -772,11 +1103,57 @@
       document.addEventListener("touchcancel", this.onDragHandleTouchEnd, {
         passive: false,
       });
+
+      // 确保键盘切换按钮点击时不会触发拖动
+      const keyboardToggleMouse = document.getElementById("keyboard-toggle-mouse");
+      if (keyboardToggleMouse) {
+        keyboardToggleMouse.addEventListener("touchstart", (e) => {
+          e.stopPropagation();
+        });
+        keyboardToggleMouse.addEventListener("click", (e) => {
+          e.stopPropagation();
+        });
+      }
+    }
+
+    bindVirtualKeyboardDragging() {
+      const { virtualKeyboard, keyboardHeader, keyboardClose, videoContainer } = this.elements;
+      if (!virtualKeyboard || !keyboardHeader || !videoContainer) return;
+
+      keyboardHeader.addEventListener("touchstart", this.onKeyboardDragHandleTouchStart, {
+        passive: false,
+      });
+      document.addEventListener("touchmove", this.onKeyboardDragHandleTouchMove, {
+        passive: false,
+      });
+      document.addEventListener("touchend", this.onKeyboardDragHandleTouchEnd, {
+        passive: false,
+      });
+      document.addEventListener("touchcancel", this.onKeyboardDragHandleTouchEnd, {
+        passive: false,
+      });
+
+      // 确保关闭按钮点击时不会触发拖动
+      if (keyboardClose) {
+        keyboardClose.addEventListener("touchstart", (e) => {
+          e.stopPropagation();
+        });
+        keyboardClose.addEventListener("click", (e) => {
+          e.stopPropagation();
+        });
+      }
     }
 
     onDragHandleTouchStart(event) {
       const touch = event.touches?.[0];
       if (!touch || !this.elements.virtualMouse) return;
+      
+      // 检查是否点击在按钮上
+      const target = event.target;
+      if (target && (target.id === "keyboard-toggle-mouse" || target.closest("#keyboard-toggle-mouse"))) {
+        return; // 不触发拖动
+      }
+      
       event.preventDefault();
       const rect = this.elements.virtualMouse.getBoundingClientRect();
       this.state.draggingVirtualMouse = true;
@@ -832,6 +1209,67 @@
       this.elements.virtualMouse?.classList.toggle("minimized");
     }
 
+    onKeyboardDragHandleTouchStart(event) {
+      const touch = event.touches?.[0];
+      if (!touch || !this.elements.virtualKeyboard) return;
+      
+      // 检查是否点击在关闭按钮上
+      const target = event.target;
+      if (target && (target.id === "keyboard-close" || target.closest("#keyboard-close"))) {
+        return; // 不触发拖动
+      }
+      
+      event.preventDefault();
+      const rect = this.elements.virtualKeyboard.getBoundingClientRect();
+      this.state.draggingVirtualKeyboard = true;
+      // 添加dragging类以禁用transition
+      this.elements.virtualKeyboard.classList.add("dragging");
+      this.state.keyboardDragOffset = {
+        x: touch.clientX - rect.left,
+        y: touch.clientY - rect.top,
+      };
+    }
+
+    onKeyboardDragHandleTouchMove(event) {
+      if (!this.state.draggingVirtualKeyboard) return;
+      const touch = event.touches?.[0];
+      if (!touch || !this.elements.videoContainer || !this.elements.virtualKeyboard)
+        return;
+      event.preventDefault();
+
+      const containerRect = this.elements.videoContainer.getBoundingClientRect();
+      // 直接使用触摸位置，减去偏移量
+      let newX = touch.clientX - this.state.keyboardDragOffset.x - containerRect.left;
+      let newY = touch.clientY - this.state.keyboardDragOffset.y - containerRect.top;
+
+      const maxX = Math.max(
+        0,
+        containerRect.width - this.elements.virtualKeyboard.offsetWidth
+      );
+      const maxY = Math.max(
+        0,
+        containerRect.height - this.elements.virtualKeyboard.offsetHeight
+      );
+
+      newX = Math.max(0, Math.min(newX, maxX));
+      newY = Math.max(0, Math.min(newY, maxY));
+
+      // 直接更新位置，不使用requestAnimationFrame以保持跟手
+      this.elements.virtualKeyboard.style.left = `${newX}px`;
+      this.elements.virtualKeyboard.style.top = `${newY}px`;
+      this.elements.virtualKeyboard.style.bottom = "auto";
+      this.elements.virtualKeyboard.style.transform = "none";
+    }
+
+    onKeyboardDragHandleTouchEnd() {
+      this.state.draggingVirtualKeyboard = false;
+      // 移除dragging类以恢复transition
+      if (this.elements.virtualKeyboard) {
+        this.elements.virtualKeyboard.classList.remove("dragging");
+      }
+    }
+
+
     showPointerLockToast(text, duration = 2500) {
       let toast = document.getElementById("pointerlock-toast");
       if (!toast) {
@@ -867,6 +1305,10 @@
 
     handleExternalMouseEvent(event) {
       if (!event || !event.type) return;
+      // Don't handle mouse events while dragging UI elements
+      if (this.isDraggingAnyElement()) {
+        return;
+      }
       switch (event.type) {
         case "mousedown":
           this.onPointerDown(event);
@@ -882,6 +1324,170 @@
           break;
         default:
           break;
+      }
+    }
+
+    isDraggingAnyElement() {
+      return (
+        this.state.draggingVirtualMouse ||
+        this.state.draggingVirtualKeyboard ||
+        this.state.draggingPanel
+      );
+    }
+
+    setDraggingPanel(isDragging) {
+      this.state.draggingPanel = isDragging;
+    }
+
+    // Calculate distance between two touch points
+    getTouchDistance(touch1, touch2) {
+      const dx = touch2.clientX - touch1.clientX;
+      const dy = touch2.clientY - touch1.clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // Get center point between two touches
+    getTouchCenter(touch1, touch2) {
+      return {
+        x: (touch1.clientX + touch2.clientX) / 2,
+        y: (touch1.clientY + touch2.clientY) / 2,
+      };
+    }
+
+    // Pinch zoom handlers
+    onPinchStart(event) {
+      // Only handle on video element
+      if (event.target !== this.elements.video && !this.elements.video?.contains(event.target)) {
+        return;
+      }
+      
+      if (event.touches.length === 2) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.state.pinchZoomActive = true;
+        const touch1 = event.touches[0];
+        const touch2 = event.touches[1];
+        this.state.initialPinchDistance = this.getTouchDistance(touch1, touch2);
+        this.state.initialScale = this.state.currentScale;
+        // Record initial center point and translate for panning
+        this.state.initialPinchCenter = this.getTouchCenter(touch1, touch2);
+        this.state.initialTranslateX = this.state.currentTranslateX;
+        this.state.initialTranslateY = this.state.currentTranslateY;
+        // Clear single touch state to prevent mouse events
+        this.state.touchActive = false;
+        this.state.touchStartPos = null;
+        this.state.touchLastPos = null;
+      } else if (event.touches.length === 1 && !this.state.pinchZoomActive) {
+        // Single touch - check for double tap to reset zoom
+        const now = Date.now();
+        if (now - this.state.lastDoubleTapTime < 300) {
+          // Double tap detected - reset zoom
+          event.preventDefault();
+          this.resetZoom();
+          this.state.lastDoubleTapTime = 0;
+        } else {
+          this.state.lastDoubleTapTime = now;
+        }
+      }
+    }
+
+    onPinchMove(event) {
+      // Check for two touches first, even if pinchZoomActive is false (might have started with one touch)
+      if (event.touches.length === 2) {
+        if (!this.state.pinchZoomActive) {
+          // Start pinch zoom if not already active
+          this.state.pinchZoomActive = true;
+          const touch1 = event.touches[0];
+          const touch2 = event.touches[1];
+          this.state.initialPinchDistance = this.getTouchDistance(touch1, touch2);
+          this.state.initialScale = this.state.currentScale;
+          this.state.initialPinchCenter = this.getTouchCenter(touch1, touch2);
+          this.state.initialTranslateX = this.state.currentTranslateX;
+          this.state.initialTranslateY = this.state.currentTranslateY;
+        }
+        
+        event.preventDefault();
+        event.stopPropagation();
+
+        const touch1 = event.touches[0];
+        const touch2 = event.touches[1];
+        const currentDistance = this.getTouchDistance(touch1, touch2);
+        const currentCenter = this.getTouchCenter(touch1, touch2);
+        
+        // Calculate scale factor
+        const scaleFactor = currentDistance / this.state.initialPinchDistance;
+        const newScale = this.state.initialScale * scaleFactor;
+        
+        // Limit scale between 1.0x (initial size) and 3x
+        const clampedScale = Math.max(1.0, Math.min(3.0, newScale));
+        this.state.currentScale = clampedScale;
+        
+        // Calculate pan (translation) based on center point movement
+        if (this.state.initialPinchCenter) {
+          const deltaX = currentCenter.x - this.state.initialPinchCenter.x;
+          const deltaY = currentCenter.y - this.state.initialPinchCenter.y;
+          
+          // Calculate new translate values based on initial translate + delta
+          let newTranslateX = this.state.initialTranslateX + deltaX;
+          let newTranslateY = this.state.initialTranslateY + deltaY;
+          
+          // Constrain translation to keep image within bounds
+          if (this.elements.video && this.elements.videoContainer) {
+            this.ensureVideoRect();
+            if (this.state.videoRect) {
+              const videoWidth = this.state.videoRect.width;
+              const videoHeight = this.state.videoRect.height;
+              
+              // Calculate maximum allowed translation
+              // When scaled, the image is larger, so we can move it more
+              const scaledWidth = videoWidth * clampedScale;
+              const scaledHeight = videoHeight * clampedScale;
+              const maxTranslateX = Math.max(0, (scaledWidth - videoWidth) / 2);
+              const maxTranslateY = Math.max(0, (scaledHeight - videoHeight) / 2);
+              
+              // Clamp translation values
+              newTranslateX = Math.max(-maxTranslateX, Math.min(maxTranslateX, newTranslateX));
+              newTranslateY = Math.max(-maxTranslateY, Math.min(maxTranslateY, newTranslateY));
+            }
+          }
+          
+          this.state.currentTranslateX = newTranslateX;
+          this.state.currentTranslateY = newTranslateY;
+        }
+        
+        // Apply combined transform (scale + translate) to video element
+        if (this.elements.video) {
+          this.elements.video.style.transform = `scale(${clampedScale}) translate(${this.state.currentTranslateX}px, ${this.state.currentTranslateY}px)`;
+          this.elements.video.style.transformOrigin = "center center";
+        }
+      } else if (this.state.pinchZoomActive && event.touches.length < 2) {
+        // Pinch ended
+        this.state.pinchZoomActive = false;
+        this.state.initialPinchDistance = 0;
+        this.state.initialPinchCenter = null;
+      }
+    }
+
+    onPinchEnd(event) {
+      if (this.state.pinchZoomActive && event.touches.length < 2) {
+        this.state.pinchZoomActive = false;
+        this.state.initialPinchDistance = 0;
+        this.state.initialPinchCenter = null;
+        // Don't prevent default for single touch after pinch ends
+        // This allows normal touch handling to resume
+      }
+    }
+
+    resetZoom() {
+      this.state.currentScale = 1.0;
+      this.state.initialScale = 1.0;
+      this.state.currentTranslateX = 0;
+      this.state.currentTranslateY = 0;
+      this.state.initialTranslateX = 0;
+      this.state.initialTranslateY = 0;
+      if (this.elements.video) {
+        this.elements.video.style.transform = "scale(1) translate(0, 0)";
+        this.elements.video.style.transformOrigin = "center center";
       }
     }
   }

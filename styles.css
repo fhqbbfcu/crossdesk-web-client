@@ -70,11 +70,39 @@ body {
 
 .connection-panel {
   background: var(--card-background);
-  border-radius: var(--border-radius);
+  border-radius: 24px; /* Same radius as status bar panel */
   padding: 24px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  max-width: 400px;
-  width: 90%;
+  max-width: 320px;
+  width: 85%;
+  /* Disable text selection and copying */
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  /* Disable double-tap zoom on mobile */
+  touch-action: manipulation;
+  -ms-touch-action: manipulation;
+}
+
+/* Reduce width in portrait orientation */
+@media (orientation: portrait) {
+  .connection-panel {
+    width: 75%;
+    max-width: 280px;
+  }
+  
+  /* Keep label and input on same line in portrait mode if space allows */
+  .option {
+    flex-wrap: nowrap;
+  }
+  
+  .option label {
+    width: auto;
+    min-width: 100px;
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
 }
 
 .connection-header {
@@ -82,12 +110,35 @@ body {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 20px;
+  /* Disable text selection and interaction */
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  pointer-events: none;
+  /* Disable double-tap zoom */
+  touch-action: manipulation;
+  -ms-touch-action: manipulation;
+}
+
+/* Re-enable pointer events for interactive elements */
+.connection-header button,
+.connection-header .status-indicator {
+  pointer-events: auto;
 }
 
 .connection-title-with-icon {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* Disable interaction */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  touch-action: manipulation;
+  -ms-touch-action: manipulation;
 }
 
 .connection-icon {
@@ -95,6 +146,17 @@ body {
   height: 32px;
   object-fit: contain;
   flex-shrink: 0;
+  /* Disable interaction and dragging */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+  user-drag: none;
+  touch-action: manipulation;
+  -ms-touch-action: manipulation;
 }
 
 .connection-header h2 {
@@ -102,6 +164,14 @@ body {
   color: #444;
   font-weight: 500;
   font-size: 1.5rem;
+  /* Disable interaction */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  touch-action: manipulation;
+  -ms-touch-action: manipulation;
 }
 
 /* Status LED indicator */
@@ -159,11 +229,20 @@ body {
   font-weight: 500;
   font-size: 14px;
   flex-shrink: 0;
+  /* Disable interaction on labels */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  /* Disable double-tap zoom */
+  touch-action: manipulation;
+  -ms-touch-action: manipulation;
 }
 
 .option.compact label {
   width: auto;
-  min-width: 80px;
+  min-width: auto;
   font-size: 13px;
 }
 
@@ -175,6 +254,13 @@ body {
   font-size: 14px;
   transition: border-color 0.2s, box-shadow 0.2s;
   min-width: 0;
+  max-width: 200px; /* Limit input box width */
+  /* Re-enable interaction for input fields */
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
 }
 
 .option input:focus {
@@ -211,6 +297,8 @@ body {
   gap: 10px;
   margin-top: 20px;
   flex-wrap: wrap;
+  /* Re-enable interaction for buttons */
+  pointer-events: auto;
 }
 
 button {
@@ -277,6 +365,48 @@ video {
   height: 100%;
   object-fit: contain;
   display: block;
+  transition: transform 0.1s ease-out;
+  transform-origin: center center;
+}
+
+/* Connecting overlay */
+.connecting-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  pointer-events: none;
+}
+
+.connecting-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: white;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.connecting-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Connected overlay (shown when connected) */
@@ -291,35 +421,231 @@ video {
 }
 
 .connected-panel {
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(10px);
+  border: none;
   padding: 12px 16px;
   pointer-events: auto;
-  position: relative;
-  }
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+  transform: translateY(0);
+  opacity: 1;
+  cursor: default;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  border-radius: 24px; /* Same radius as minimized button (48px / 2 = 24px) */
+  /* Note: position: fixed is needed for panel positioning, icon uses absolute positioning relative to this */
+}
+
+.connected-panel.minimized {
+  transform: translateY(0);
+  opacity: 1;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  border: none;
+  width: auto;
+  min-width: 48px;
+  max-width: 48px;
+  height: 48px;
+  min-height: 48px;
+  max-height: 48px;
+  right: auto;
+  bottom: auto;
+}
+
+.connected-panel.minimized .panel-content {
+  display: none;
+}
+
+.panel-content {
+  display: block;
+  padding-left: 72px; /* Make room for the icon on the left */
+  padding-right: 16px; /* Match panel's right padding */
+}
+
+.panel-collapsed-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  backdrop-filter: blur(10px);
+  padding: 10px;
+  border-radius: 50%;
+  border: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-touch-callout: none;
+  width: 56px;
+  height: 56px;
+  min-width: 56px;
+  max-width: 56px;
+  min-height: 56px;
+  max-height: 56px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 300;
+  pointer-events: auto;
+}
+
+.panel-collapsed-bar:hover {
+  background: #ffffff;
+}
+
+.collapsed-bar-text {
+  color: #000;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.collapsed-bar-icon {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+  user-drag: none;
+  pointer-events: none;
+}
   
 .connected-header {
   display: flex;
   align-items: center;
   gap: 12px;
-    flex-wrap: wrap;
-  }
-  
-.connected-header .status-indicator {
-  flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .connected-controls-row {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   flex-wrap: wrap;
   flex: 1;
+  width: 100%;
+  justify-content: flex-end;
+  box-sizing: border-box;
+}
+
+/* Ensure all controls have consistent height and alignment */
+.connected-controls-row > * {
+  height: 36px;
+  display: flex;
+  align-items: center;
+}
+
+/* When space is limited or in landscape orientation, switch to vertical layout */
+@media (max-width: 900px), (orientation: landscape) {
+  .connected-controls-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  
+  .connected-controls-row .option.compact {
+    width: 100%;
+  }
+  
+  .controls-right-group {
+    width: 100%;
+    margin-left: 0;
+    justify-content: center;
+  }
+  
+  .connected-controls-row .connection-status-group {
+    width: auto;
+    justify-content: center;
+  }
+  
+  .connected-controls-row .disconnect-btn {
+    width: auto;
+    min-width: auto;
+  }
+  
+  .connected-controls-row .minimize-btn {
+    width: 28px;
+    min-width: 28px;
+  }
 }
 
 .connected-header .option.compact {
   margin-bottom: 0;
   flex-shrink: 0;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px; /* Ensure consistent gap between label and select */
+}
+
+.connected-header .option.compact label {
+  margin-bottom: 0;
+  height: auto;
+  line-height: 36px;
+  min-width: 60px;
+  text-align: right;
+}
+
+.connected-header .option.compact select {
+  height: 36px;
+  box-sizing: border-box;
+  width: 110px;
+  min-width: 110px;
+  max-width: 110px; /* Ensure fixed width */
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  padding: 0 8px;
+  margin: 0;
+  margin-right: 0; /* Ensure no right margin */
+  flex-shrink: 0; /* Prevent shrinking */
+}
+
+/* Left side: options (画面 and 鼠标模式) */
+.connected-controls-row .option.compact {
+  flex-shrink: 0;
+  /* Ensure select box right edge aligns with disconnect button */
+  display: flex;
+  align-items: center;
+}
+
+/* Right side: status and buttons */
+.controls-right-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  margin-left: 0;
+  height: 36px;
+  /* Ensure disconnect button right edge aligns with select box */
+  position: relative;
+}
+
+.connected-controls-row .connection-status-group {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.connected-controls-row .disconnect-btn {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.connected-controls-row .minimize-btn {
+  flex-shrink: 0;
+  margin: 0;
 }
 
 .control-buttons {
@@ -344,42 +670,36 @@ video {
   background-color: var(--hover-color);
 }
 
-/* Top right controls (status and disconnect button) */
-.top-right-controls {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 200;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  pointer-events: auto;
-}
-
+/* Connection status group (now inside panel) */
 .connection-status-group {
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: rgba(0, 0, 0, 0.6);
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.05);
   backdrop-filter: blur(10px);
-  padding: 6px 12px;
+  padding: 0 8px;
   border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  height: 36px;
+  box-sizing: border-box;
+  min-width: auto;
+  justify-content: center;
 }
 
 .connection-status-label {
-  color: white;
+  color: #333;
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
 }
 
-.top-right-controls .status-indicator {
+.connection-status-group .status-indicator {
   flex-shrink: 0;
 }
 
-/* Disconnect button in top right corner */
-.connected-overlay .disconnect-btn-top-right {
-  padding: 8px 16px;
+/* Disconnect button (now inside panel) */
+.disconnect-btn {
+  padding: 0 12px;
   background-color: var(--danger-color);
   color: white;
   border: none;
@@ -388,34 +708,80 @@ video {
   font-size: 13px;
   font-weight: 500;
   height: 36px;
+  min-width: auto;
   transition: background-color 0.2s;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
-.disconnect-btn-top-right:hover {
+  white-space: nowrap;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  margin-right: 0; /* Ensure no right margin for alignment */
+  position: relative; /* Ensure box-shadow doesn't affect alignment */
+  }
+  
+.disconnect-btn:hover {
   background-color: var(--danger-hover-color);
 }
 
-.disconnect-btn-top-right:active {
-  transform: translateY(1px);
+.disconnect-btn:active {
+  transform: translateY(0);
+}
+
+/* Minimize button */
+.minimize-btn {
+  padding: 0;
+  background-color: rgba(0, 0, 0, 0.1);
+  color: #333;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+  height: 36px;
+  width: 28px;
+  min-width: 28px;
+  line-height: 1;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  }
+
+.minimize-btn:hover {
+  background-color: rgba(0, 0, 0, 0.15);
+  border-color: rgba(0, 0, 0, 0.3);
+}
+
+.minimize-btn:active {
+  transform: translateY(0);
 }
 
 /* Virtual mouse related styles */
 #virtual-mouse {
   position: absolute;
-  bottom: 20px;
+  bottom: 80px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
-  padding: 8px;
-  background-color: rgba(0, 0, 0, 0.5);
-  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.18);
+  border-radius: max(8px, 1vw);
+  padding: max(6px, 0.8vh) max(6px, 0.8vw);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  width: auto;
+  min-width: min(320px, 90vw);
+  max-width: min(400px, 90vw);
   touch-action: none;
-  min-width: 320px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-sizing: border-box;
+  backdrop-filter: blur(3px);
+  transition: background-color 0.2s, padding 0.3s ease;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-  transition: background-color 0.2s, padding 0.3s ease;
 }
 
 #virtual-mouse.dragging {
@@ -423,55 +789,336 @@ video {
 }
 
 #virtual-mouse.minimized {
-  background-color: rgba(0, 0, 0, 0.7);
-  padding: 6px;
+  background-color: rgba(255, 255, 255, 0.18);
+  padding: max(6px, 0.8vh) max(4px, 0.6vw);
+}
+
+.virtual-mouse-header {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  margin-bottom: max(4px, 0.6vh);
+  padding-left: 0;
+  padding-right: 0;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+  gap: max(4px, 0.6vw);
 }
 
 .virtual-mouse-row {
   display: flex;
+  gap: max(4px, 0.6vw);
+  justify-content: center;
   align-items: stretch;
-  gap: 8px;
+  flex-wrap: nowrap;
+  width: 100%;
 }
 
 .virtual-mouse-btn {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 54px;
+  max-width: none;
   height: 54px;
-  border-radius: 8px;
-  border: 1px solid #fff;
-  background-color: rgba(255, 255, 255, 0.9);
-  color: #333;
-  font-weight: bold;
+  background-color: rgba(255, 255, 255, 0.48) !important;
+  color: #222;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: max(4px, 0.6vw);
   font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
   user-select: none;
   touch-action: manipulation;
-  transition: background-color 0.2s;
+  transition: all 0.1s;
+  padding: 0 8px;
+  box-sizing: border-box;
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .virtual-mouse-btn:active {
-  background-color: rgba(200, 200, 200, 0.9);
+  background-color: rgba(200, 200, 200, 0.65) !important;
+  transform: scale(0.92);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
-.virtual-mouse-wheel {
-  width: 36px;
+.virtual-mouse-btn:focus {
+  outline: none !important;
+  background-color: rgba(255, 255, 255, 0.48) !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
+}
+
+.virtual-scroll-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 30px;
   height: 54px;
-  border-radius: 8px;
-  background-color: #ddd;
+  flex-shrink: 0;
+  flex-grow: 0;
+}
+
+.virtual-scroll-btn {
+  flex: 1;
+  width: 30px;
+  min-width: 30px;
+  max-width: 30px;
+  height: 25px;
+  background-color: rgba(255, 255, 255, 0.48) !important;
+  color: #222;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: max(4px, 0.6vw);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
   user-select: none;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
-  transition: background-color 0.2s;
+  touch-action: manipulation;
+  transition: all 0.1s;
+  padding: 0;
+  box-sizing: border-box;
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.virtual-mouse-wheel:active {
-  background-color: #ccc;
+.virtual-scroll-btn:active {
+  background-color: rgba(200, 200, 200, 0.65) !important;
+  transform: scale(0.92);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
+
+.virtual-scroll-btn:focus {
+  outline: none !important;
+  background-color: rgba(255, 255, 255, 0.48) !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Virtual keyboard styles */
+.virtual-keyboard {
+  position: absolute;
+  bottom: max(80px, 8vh);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  background-color: rgba(255, 255, 255, 0.18);
+  border-radius: max(8px, 1vw);
+  padding: max(8px, 1vh) max(6px, 0.8vw);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  width: min(98%, calc(100vw - 20px));
+  max-width: 98%;
+  min-width: min(300px, 90vw);
+  touch-action: none;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-sizing: border-box;
+  backdrop-filter: blur(3px);
+  transition: background-color 0.2s, padding 0.3s ease;
+}
+
+.virtual-keyboard.dragging {
+  transition: none;
+}
+
+.keyboard-header {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  margin-bottom: max(6px, 0.8vh);
+  padding-left: 0;
+  padding-right: 0;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.keyboard-toggle-btn {
+  background-color: rgba(0, 0, 0, 0.2);
+  color: #222;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  border-radius: max(4px, 0.6vw);
+  padding: max(4px, 0.6vh) max(10px, 1.2vw);
+  font-size: max(12px, 1.2vw);
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  transition: all 0.2s;
+  font-weight: 500;
+  position: relative;
+  z-index: 1;
+}
+
+.keyboard-close-btn {
+  background-color: rgba(255, 255, 255, 0.6);
+  color: #222;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: max(4px, 0.6vw);
+  padding: max(4px, 0.6vh) max(10px, 1.2vw);
+  font-size: max(12px, 1.2vw);
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  transition: all 0.2s;
+  font-weight: 500;
+  position: relative;
+  z-index: 1;
+}
+
+.keyboard-toggle-btn:hover {
+  background-color: rgba(0, 0, 0, 0.25);
+}
+
+.keyboard-close-btn:hover {
+  background-color: rgba(255, 255, 255, 0.7);
+}
+
+.keyboard-toggle-btn:active {
+  background-color: rgba(0, 0, 0, 0.3);
+  transform: scale(0.95);
+}
+
+.keyboard-close-btn:active {
+  background-color: rgba(255, 255, 255, 0.8);
+  transform: scale(0.95);
+}
+
+.keyboard-layout {
+  display: flex;
+  flex-direction: column;
+  gap: max(4px, 0.6vh);
+}
+
+.keyboard-row {
+  display: flex;
+  gap: max(2px, 0.4vw);
+  justify-content: center;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  width: 100%;
+}
+
+.keyboard-key {
+  flex: 1 1 0;
+  min-width: max(22px, 2.8vw);
+  max-width: none;
+  height: max(32px, 4.5vh);
+  background-color: rgba(255, 255, 255, 0.48) !important;
+  color: #222;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: max(4px, 0.6vw);
+  font-size: max(10px, 1.1vw);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  transition: all 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 max(4px, 0.6vw);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  box-sizing: border-box;
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.keyboard-key:active {
+  background-color: rgba(200, 200, 200, 0.65);
+  transform: scale(0.92);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.keyboard-key:focus {
+  outline: none !important;
+  background-color: rgba(255, 255, 255, 0.48) !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
+}
+
+.keyboard-key:focus:not(:active) {
+  outline: none !important;
+  background-color: rgba(255, 255, 255, 0.48) !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
+}
+
+.keyboard-key:focus-visible {
+  outline: none !important;
+  background-color: rgba(255, 255, 255, 0.48) !important;
+}
+
+/* Wide keys (Backspace, Enter, Caps, Shift) - 1.5x width */
+.keyboard-key-wide {
+  flex: 1.5 1 0;
+  min-width: max(35px, 4.5vw);
+}
+
+/* Space key - 4x width */
+.keyboard-key-space {
+  flex: 4 1 0;
+  min-width: max(90px, 12vw);
+}
+
+/* Responsive adjustments for very small screens */
+@media (max-width: 480px) {
+  .virtual-keyboard {
+    padding: max(6px, 0.8vh) max(4px, 0.6vw);
+    border-radius: max(6px, 0.8vw);
+  }
+  
+  .keyboard-key {
+    min-width: max(18px, 2.2vw);
+    height: max(28px, 4vh);
+    font-size: max(9px, 1vw);
+    padding: 0 max(3px, 0.5vw);
+  }
+  
+  .keyboard-key-wide {
+    min-width: max(28px, 3.5vw);
+  }
+  
+  .keyboard-key-space {
+    min-width: max(70px, 10vw);
+  }
+  
+  .keyboard-row {
+    gap: max(1.5px, 0.3vw);
+  }
+  
+  .keyboard-layout {
+    gap: max(3px, 0.5vh);
+  }
+}
+
+/* Responsive adjustments for large screens */
+@media (min-width: 1024px) {
+  .virtual-keyboard {
+    max-width: 800px;
+  }
+  
+  .keyboard-key {
+    min-width: 28px;
+    height: 42px;
+    font-size: 13px;
+    padding: 0 8px;
+  }
+  
+  .keyboard-key-wide {
+    min-width: 42px;
+  }
+  
+  .keyboard-key-space {
+    min-width: 112px;
+  }
+  
+  .keyboard-row {
+    gap: 4px;
+  }
+}
+
 
 .drag-handle {
   position: absolute;
@@ -513,130 +1160,6 @@ video {
   }
 }
 
-/* Debug panel */
-.debug-panel {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  max-height: 40vh;
-  background: var(--card-background);
-  border-top: 2px solid var(--border-color);
-  z-index: 2000;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.2);
-}
-
-.debug-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--status-background);
-}
-
-.debug-header h3 {
-  margin: 0;
-  font-size: 16px;
-  color: #444;
-}
-
-.debug-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.debug-close-btn {
-  padding: 6px 12px;
-  background-color: var(--danger-color);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  height: 32px;
-  transition: background-color 0.2s;
-  flex-shrink: 0;
-}
-
-.debug-close-btn:hover {
-  background-color: var(--danger-hover-color);
-}
-
-.debug-log {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px 16px;
-  font-family: monospace;
-  font-size: 12px;
-  white-space: pre-wrap;
-  background: #1e1e1e;
-  color: #d4d4d4;
-  min-height: 150px;
-  max-height: calc(40vh - 120px);
-}
-
-.debug-input {
-  display: flex;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border-color);
-  background: var(--status-background);
-}
-
-.debug-input input {
-  flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  font-size: 13px;
-}
-
-.debug-input input:focus {
-  outline: none;
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
-}
-
-.debug-toggle {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  z-index: 1500;
-  padding: 8px 16px;
-  background-color: rgba(0, 0, 0, 0.7);
-  color: white;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 20px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.debug-toggle:hover {
-  background-color: rgba(0, 0, 0, 0.9);
-}
-
-/* Scrollbar styling */
-.debug-log::-webkit-scrollbar {
-  width: 8px;
-}
-
-.debug-log::-webkit-scrollbar-track {
-  background: #1e1e1e;
-}
-
-.debug-log::-webkit-scrollbar-thumb {
-  background: #555;
-  border-radius: 4px;
-}
-
-.debug-log::-webkit-scrollbar-thumb:hover {
-  background: #777;
-}
 
 /* Focus styles for accessibility */
 button:focus,
@@ -646,21 +1169,59 @@ select:focus {
   outline-offset: 2px;
 }
 
+/* Override global button styles for keyboard keys */
+.keyboard-key,
+.keyboard-key:focus,
+.keyboard-key:focus-visible,
+.keyboard-key:focus:not(:active) {
+  background-color: rgba(255, 255, 255, 0.48) !important;
+  outline: none !important;
+  outline-offset: 0 !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
+  color: #222 !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+}
+
 /* Mobile responsive */
 @media (max-width: 768px) {
   .connection-panel {
     padding: 20px;
-    max-width: 90%;
+    max-width: 75%;
+    width: 75%;
   }
+}
 
+/* Further reduce width in portrait on small screens */
+@media (max-width: 768px) and (orientation: portrait) {
+  .connection-panel {
+    width: 70%;
+    max-width: 280px;
+  }
+}
+
+@media (max-width: 768px) {
   .option {
-    flex-wrap: wrap;
+    flex-wrap: nowrap; /* Keep label and input on same line if space allows */
   }
 
   .option label {
-    width: 100%;
-    margin-bottom: 5px;
-}
+    width: auto;
+    min-width: 100px; /* Minimum width for label */
+    margin-bottom: 0; /* Remove bottom margin to keep on same line */
+    flex-shrink: 0; /* Prevent label from shrinking */
+  }
+  
+  /* Only wrap if screen is very narrow */
+  @media (max-width: 400px) {
+    .option {
+      flex-wrap: wrap;
+    }
+    
+    .option label {
+      width: 100%;
+      margin-bottom: 5px;
+    }
+  }
 
   .connected-header {
     flex-direction: column;
