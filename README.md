@@ -13,8 +13,9 @@ CrossDesk Web Client 是针对 CrossDesk 桌面远程软件进行适配的 Web �
 
 ## 部署
 
-直接 fork 本仓库，进入你的仓库 Settings → Pages，在 Branch 中选择 main，点击 Save。稍作等待后刷新页面，你会得到如下显示，该链接就是你的 Web 客户端地址。
-<img width="828" height="225" alt="image" src="https://github.com/user-attachments/assets/0b7c1221-804c-470a-8b2d-903b23ff8cd1" />
+直接 Fork 本仓库，进入你的仓库 Settings → Pages，在 Branch 中选择 main，点击 Save。稍作等待后刷新页面，你会得到如下显示，该链接就是你的 Web 客户端地址。
+
+<img width="807" height="197" alt="image" src="https://github.com/user-attachments/assets/da20745e-7c58-41d9-b6f5-31d5f703b8ce" />
 
 ## 配置项
 
