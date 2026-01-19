@@ -24,8 +24,8 @@ const elements = {
 const DEFAULT_CONFIG = {
   signalingUrl: "121.4.104.2:33333"，
   iceServers: [
-    { urls: ["stun:121.4.104.2:3478"] },
-    { urls: ["turn:121.4.104.2:3478"], username: "kurento", credential: "kurento" },
+    { urls: ["stun:121.4.104.2:33334"] },
+    { urls: ["turn:121.4.104.2:33334"], username: "crossdesk", credential: "crossdeskpw" },
   ],
   heartbeatIntervalMs: 3000,
   heartbeatTimeoutMs: 10000,
