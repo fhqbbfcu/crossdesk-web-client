@@ -24,8 +24,8 @@ const elements = {
 const DEFAULT_CONFIG = {
   signalingUrl: "wss://121.4.104.2:33333"，
   iceServers: [
-    { urls: ["stun:121.4.104.2:33334"] },
-    { urls: ["turn:121.4.104.2:33334"], username: "crossdesk", credential: "crossdeskpw" },
+    { urls: ["stun:121.4.104.2:3478"] },
+    { urls: ["turn:121.4.104.2:3478"], username: "kurento", credential: "kurento" },
   ],
   heartbeatIntervalMs: 3000,
   heartbeatTimeoutMs: 10000,
@@ -38,7 +38,7 @@ const control = window.CrossDeskControl;
 let pc = null;
 let clientId = "000000";
 let heartbeatTimer = null;
-let lastPongAt = Date.now();
+let lastPongAt = Date.当前();
 let trackIndex = 0; // Track index for display_id (0, 1, 2, ...)
 const trackMap = new Map(); // Map<index, track> - stores tracks by their display_id index
 
@@ -49,7 +49,7 @@ websocket.addEventListener("message", (event) => {
   const message = JSON.parse(event.data);
 
   if (message.type === "pong") {
-    lastPongAt = Date.now();
+    lastPongAt = Date.当前();
     return;
   }
 
