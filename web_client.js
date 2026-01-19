@@ -22,7 +22,7 @@ const elements = {
 
 // Config section (can be overridden by setting window.CROSSDESK_CONFIG before this script runs)
 const DEFAULT_CONFIG = {
-  signalingUrl: "121.4.104.2:33333"，
+  signalingUrl: "wss://121.4.104.2:33333"，
   iceServers: [
     { urls: ["stun:121.4.104.2:33334"] },
     { urls: ["turn:121.4.104.2:33334"], username: "crossdesk", credential: "crossdeskpw" },
