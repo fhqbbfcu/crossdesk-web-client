@@ -247,7 +247,9 @@
         document.pointerLockElement === this.elements.video;
       if (this.state.pointerLocked) {
         this.state.videoRect =
-          this.elements.video?.getBoundingClientRect() ?? null;
+          this.elements.video
+            ? this.getRenderedVideoContentRect(this.elements.video)
+            : null;
       } else {
         this.state.videoRect = null;
         this.showPointerLockToast(
@@ -782,7 +784,43 @@
     ensureVideoRect() {
       const { video } = this.elements;
       if (!video) return;
-      this.state.videoRect = video.getBoundingClientRect();
+      this.state.videoRect = this.getRenderedVideoContentRect(video);
+    }
+
+    getRenderedVideoContentRect(video) {
+      const rect = video.getBoundingClientRect();
+      const videoWidth = video.videoWidth || 0;
+      const videoHeight = video.videoHeight || 0;
+      if (!videoWidth || !videoHeight || !rect.width || !rect.height) {
+        return rect;
+      }
+
+      const objectFit = window.getComputedStyle?.(video).objectFit || "fill";
+      if (objectFit !== "contain" && objectFit !== "scale-down") {
+        return rect;
+      }
+
+      // object-fit: contain can leave letterbox space inside the element.
+      const containScale = Math.min(
+        rect.width / videoWidth,
+        rect.height / videoHeight,
+      );
+      const scale =
+        objectFit === "scale-down" ? Math.min(1, containScale) : containScale;
+      const width = videoWidth * scale;
+      const height = videoHeight * scale;
+
+      const left = rect.left + (rect.width - width) / 2;
+      const top = rect.top + (rect.height - height) / 2;
+
+      return {
+        left,
+        top,
+        width,
+        height,
+        right: left + width,
+        bottom: top + height,
+      };
     }
 
     isInsideVideo(clientX, clientY) {
