@@ -29,7 +29,6 @@ const DEFAULT_CONFIG = {
   signalingUrl: "wss://121.4.104.2:9099",
   iceServers: [
     { urls: ["stun:121.4.104.2:4478"] },
-    { urls: ["turn:121.4.104.2:4478"], username: "crossdesk", credential: "crossdeskpw" },
   ],
   heartbeatIntervalMs: 3000,
   heartbeatTimeoutMs: 10000,
