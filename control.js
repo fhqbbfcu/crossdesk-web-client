@@ -32,6 +32,214 @@
     return !["checkbox", "radio", "button", "submit", "reset"].includes(type);
   };
 
+  // Pointer Lock targets the video even when the page cursor is over local UI.
+  // Route only status-panel gestures here, keeping their press/release ownership
+  // separate from remote mouse buttons.
+  class LockedPanelController {
+    constructor(control) {
+      this.control = control;
+      this.press = null;
+      this.hover = null;
+      this.inside = false;
+      this.menu = null;
+      for (const type of ["mousedown", "mousemove", "mouseup", "click",
+        "dblclick", "auxclick", "contextmenu"]) {
+        document.addEventListener(type, (event) => {
+          if (control.state.pointerLocked && event.target === control.elements.video) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, { capture: true });
+      }
+    }
+
+    target() {
+      const pos = this.control.state.lockedPointerPos;
+      if (!pos) return null;
+      const hit = document.elementFromPoint?.(pos.x, pos.y);
+      if (!hit?.closest("#connected-panel, .locked-select-menu")) return null;
+      const target = hit.closest("button, select, input, a, #panel-collapsed-bar");
+      return target || hit;
+    }
+
+    emit(type, target, event = {}, cancelled = false) {
+      const pos = this.control.state.lockedPointerPos || { x: 0, y: 0 };
+      const mouse = new MouseEvent(type, {
+        bubbles: !["mouseenter", "mouseleave"].includes(type),
+        cancelable: true,
+        clientX: pos.x, clientY: pos.y,
+        button: event.button ?? 0, buttons: event.buttons ?? 0,
+        ctrlKey: event.ctrlKey, shiftKey: event.shiftKey,
+        altKey: event.altKey, metaKey: event.metaKey,
+      });
+      if (cancelled) mouse.crossdeskPointerCancelled = true;
+      target.dispatchEvent(mouse);
+    }
+
+    setHover(target) {
+      const inside = !!(target || this.menu || this.press);
+      if (this.hover === target && this.inside === inside) return;
+      if (this.hover !== target) {
+        this.hover?.classList.remove("pointer-lock-hover");
+        target?.classList.add("pointer-lock-hover");
+        this.hover = target;
+      }
+      const panel = document.getElementById("connected-panel");
+      panel?.classList.toggle("pointer-lock-within", inside);
+      if (inside !== this.inside) {
+        this.inside = inside;
+        if (panel) this.emit(inside ? "mouseenter" : "mouseleave", panel);
+        if (!inside && this.control.state.pointerLocked) {
+          this.control.elements.video?.focus({ preventScroll: true });
+        }
+      }
+    }
+
+    down(event) {
+      if (this.control.pressedMouseButtons.size) return false;
+      if (this.press) return true;
+      const target = this.target();
+      if (this.menu && !this.menu.element.contains(target)) {
+        this.closeMenu();
+        event.preventDefault();
+        return true;
+      }
+      if (!target) return false;
+      event.preventDefault();
+      if (event.button !== 0 || target.matches(":disabled")) return true;
+      this.control.releaseKeyboardKeys();
+      this.press = { target, ...this.control.state.lockedPointerPos, dragged: false };
+      target.classList.add("pointer-lock-active");
+      target.focus?.({ preventScroll: true });
+      this.emit("mousedown", target, event);
+      return true;
+    }
+
+    move(event) {
+      if (this.control.pressedMouseButtons.size) {
+        this.setHover(null);
+        return false;
+      }
+      const target = this.target();
+      this.setHover(target);
+      if (this.press) {
+        const pos = this.control.state.lockedPointerPos;
+        this.press.dragged ||= Math.abs(pos.x - this.press.x) > 5 ||
+          Math.abs(pos.y - this.press.y) > 5;
+      }
+      const recipient = this.press?.target || target;
+      if (recipient) this.emit("mousemove", recipient, event);
+      return !!(recipient || this.menu);
+    }
+
+    up(event) {
+      if (!this.press) return false;
+      // The browser can clear the lock before pointerlockchange is delivered.
+      if (document.pointerLockElement !== this.control.elements.video) {
+        this.reset();
+        return true;
+      }
+      if (event.button !== 0) return true;
+      event.preventDefault();
+      const press = this.press;
+      const target = this.target();
+      this.press = null;
+      press.target.classList.remove("pointer-lock-active");
+      this.emit("mouseup", press.target, event);
+      if (!press.dragged && press.target === target && target.isConnected) {
+        if (target.tagName === "SELECT") this.openMenu(target);
+        else this.emit("click", target, event);
+      }
+      this.setHover(this.control.state.pointerLocked ? this.target() : null);
+      return true;
+    }
+
+    wheel(event) {
+      const target = this.target();
+      if (!target && !this.menu && !this.press) return false;
+      event.preventDefault();
+      if (this.menu && this.menu.element.contains(target)) {
+        const scale = event.deltaMode === 1 ? 16 :
+          event.deltaMode === 2 ? this.menu.element.clientHeight : 1;
+        this.menu.element.scrollTop += event.deltaY * scale;
+      }
+      return true;
+    }
+
+    openMenu(select) {
+      this.closeMenu();
+      if (select.disabled) return;
+      const menu = document.createElement("div");
+      menu.className = "locked-select-menu";
+      menu.setAttribute("role", "listbox");
+      menu.setAttribute("aria-label", select.labels?.[0]?.textContent || "选择");
+      const buttons = [];
+      for (const [index, option] of Array.from(select.options).entries()) {
+        if (option.hidden) continue;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "locked-select-option";
+        button.textContent = option.label;
+        button.disabled = option.disabled || !!option.parentElement.disabled;
+        button.setAttribute("role", "option");
+        button.setAttribute("aria-selected", String(option.selected));
+        button.addEventListener("click", () => {
+          const changed = select.selectedIndex !== index;
+          select.selectedIndex = index;
+          this.closeMenu();
+          if (changed) {
+            select.dispatchEvent(new Event("input", { bubbles: true }));
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        });
+        menu.appendChild(button);
+        if (!button.disabled) buttons.push(button);
+      }
+      menu.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          this.closeMenu();
+        } else if (["ArrowDown", "ArrowUp", "Home", "End", "Tab"].includes(event.key)) {
+          const step = event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey) ? -1 : 1;
+          const current = buttons.indexOf(document.activeElement);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 :
+            (current + step + buttons.length) % buttons.length;
+          buttons[next]?.focus();
+          buttons[next]?.scrollIntoView({ block: "nearest" });
+        } else return;
+        event.preventDefault();
+      });
+      document.body.appendChild(menu);
+      this.menu = { element: menu, select };
+      const rect = select.getBoundingClientRect();
+      menu.style.minWidth = `${Math.min(Math.max(160, rect.width), window.innerWidth - 16)}px`;
+      const bounds = menu.getBoundingClientRect();
+      menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - bounds.width - 8))}px`;
+      menu.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - bounds.height - 8))}px`;
+      const selected = buttons.find(button => button.getAttribute("aria-selected") === "true") || buttons[0];
+      selected?.focus({ preventScroll: true });
+      selected?.scrollIntoView({ block: "nearest" });
+      this.setHover(select);
+    }
+
+    closeMenu() {
+      if (!this.menu) return;
+      this.menu.element.remove();
+      this.menu = null;
+      this.control.elements.video?.focus({ preventScroll: true });
+    }
+
+    reset() {
+      if (this.press) {
+        const target = this.press.target;
+        this.press = null;
+        target.classList.remove("pointer-lock-active");
+        this.emit("mouseup", target, {}, true);
+      }
+      this.closeMenu();
+      this.setHover(null);
+    }
+  }
+
   class ControlManager {
     constructor() {
       this.dataChannel = null;
@@ -56,6 +264,7 @@
       };
 
       this.pressedMouseButtons = new Set();
+      this.pressedKeyboardKeys = new Set();
       this.lockedCursor = null;
 
       this.virtualKeyTimers = new Map(); // Store timers for each key element
@@ -97,6 +306,8 @@
         currentTranslateY: 0,
         virtualMouseMinimized: false,
       };
+
+      this.lockedPanel = new LockedPanelController(this);
 
       this.onPointerLockChange = this.onPointerLockChange.bind(this);
       this.onPointerLockError = this.onPointerLockError.bind(this);
@@ -149,6 +360,8 @@
     setDataChannel(channel) {
       if (channel !== this.dataChannel) {
         this.releaseMouseButtons();
+        this.releaseKeyboardKeys();
+        this.lockedPanel.reset();
         if (!channel && this.state.pointerLocked) {
           document.exitPointerLock?.();
           this.resetLockedPointer();
@@ -249,9 +462,14 @@
       document.addEventListener("pointerlockchange", this.onPointerLockChange);
       document.addEventListener("pointerlockerror", this.onPointerLockError);
       window.addEventListener?.("resize", () => {
+        this.lockedPanel.closeMenu();
         if (this.state.pointerLocked) this.updateLockedPointer(0, 0);
       });
-      window.addEventListener?.("blur", () => this.releaseMouseButtons());
+      window.addEventListener?.("blur", () => {
+        this.releaseMouseButtons();
+        this.releaseKeyboardKeys();
+        this.lockedPanel.reset();
+      });
       document.addEventListener("keydown", (event) => {
         if (event.ctrlKey && event.key === "Escape") {
           document.exitPointerLock?.();
@@ -268,6 +486,7 @@
         this.updateLockedPointer(0, 0);
       } else {
         this.releaseMouseButtons();
+        this.releaseKeyboardKeys();
         this.resetLockedPointer();
         this.state.videoRect = null;
         this.showPointerLockToast(
@@ -278,6 +497,7 @@
     }
 
     resetLockedPointer() {
+      this.lockedPanel.reset();
       this.state.pointerLocked = false;
       this.state.lockedPointerPos = null;
       if (this.lockedCursor) this.lockedCursor.style.display = "none";
@@ -310,8 +530,8 @@
         )),
       };
       this.state.lockedPointerPos = pos;
-      const showCursor = !this.isInsideVideo(pos.x, pos.y) ||
-        this.isInsidePanel(pos.x, pos.y);
+      const showCursor = !!this.lockedPanel.press || !!this.lockedPanel.target() ||
+        !this.isInsideVideo(pos.x, pos.y) || this.isInsidePanel(pos.x, pos.y);
       if (showCursor && !this.lockedCursor) {
         this.lockedCursor = document.createElement("div");
         this.lockedCursor.className = "locked-pointer-cursor";
@@ -333,6 +553,18 @@
       }
       this.pressedMouseButtons.clear();
       this.state.lastPointerPos = null;
+    }
+
+    releaseKeyboardKeys() {
+      for (const key of this.pressedKeyboardKeys) this.sendKeyboardAction(key, false);
+      this.pressedKeyboardKeys.clear();
+    }
+
+    isLocalKeyboardTarget(target) {
+      return isTextInput(target) ||
+        !!target?.closest?.("#connected-panel, .locked-select-menu") ||
+        (this.state.pointerLocked && !!(this.lockedPanel.press ||
+          this.lockedPanel.menu || this.lockedPanel.target()));
     }
 
     onPointerLockError() {
@@ -384,12 +616,14 @@
 
       const button = typeof event.button === "number" ? event.button : 0;
       if (button < 0 || button > 2) return;
+      if (this.state.pointerLocked && this.lockedPanel.down(event)) return;
       const { x, y } = this.getPointerPosition(event);
       this.ensureVideoRect();
       if (this.state.draggingPanel || this.isInsidePanel(x, y) ||
           !this.isInsideVideo(x, y)) return;
 
       event.preventDefault?.();
+      this.elements.video.focus?.({ preventScroll: true });
       this.updateNormalizedFromClient(x, y);
       if (!this.state.pointerLocked) {
         this.state.lastPointerPos = { x, y };
@@ -423,6 +657,7 @@
       if (event.pointerType === "touch") return;
       if (this.state.pointerLocked) {
         this.updateLockedPointer(event.movementX, event.movementY);
+        if (this.lockedPanel.move(event)) return;
       }
       if (this.isDraggingAnyElement() || this.state.pinchZoomActive) return;
       if (!this.state.pointerLocked && !this.state.lastPointerPos &&
@@ -445,6 +680,7 @@
 
     onPointerUp(event) {
       if (event.pointerType === "touch") return;
+      if (this.state.pointerLocked && this.lockedPanel.up(event)) return;
       const button = typeof event.button === "number" ? event.button : 0;
       // A press in the black border or local UI must not release/click remotely.
       if (!this.pressedMouseButtons.delete(button)) return;
@@ -465,10 +701,12 @@
 
     onPointerCancel(event) {
       if (event.pointerType === "touch") return;
+      this.lockedPanel.reset();
       this.releaseMouseButtons();
     }
 
     onWheel(event) {
+      if (this.state.pointerLocked && this.lockedPanel.wheel(event)) return;
       const now = Date.now();
       if (now - this.state.lastWheelAt < 50) return;
       this.state.lastWheelAt = now;
@@ -776,14 +1014,16 @@
         "keydown",
         (event) => {
           if (!this.isChannelOpen()) return;
-          if (isTextInput(event.target)) return;
+          if (this.isLocalKeyboardTarget(event.target)) return;
 
           if (event.cancelable) {
             event.preventDefault();
           }
 
           if (event.repeat) return;
-          this.sendKeyboardAction(event.keyCode ?? 0, true);
+          const key = event.keyCode ?? 0;
+          this.pressedKeyboardKeys.add(key);
+          this.sendKeyboardAction(key, true);
         },
         { capture: true },
       );
@@ -792,13 +1032,14 @@
         "keyup",
         (event) => {
           if (!this.isChannelOpen()) return;
-          if (isTextInput(event.target)) return;
+          const key = event.keyCode ?? 0;
+          if (!this.pressedKeyboardKeys.delete(key)) return;
 
           if (event.cancelable) {
             event.preventDefault();
           }
 
-          this.sendKeyboardAction(event.keyCode ?? 0, false);
+          this.sendKeyboardAction(key, false);
         },
         { capture: true },
       );

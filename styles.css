@@ -387,12 +387,14 @@ button {
   justify-content: center;
 }
 
-button:hover:not(:disabled) {
+button:hover:not(:disabled),
+button.pointer-lock-hover:not(:disabled) {
   background-color: var(--hover-color);
   transform: translateY(-1px);
 }
 
-button:active:not(:disabled) {
+button:active:not(:disabled),
+button.pointer-lock-active:not(:disabled) {
   transform: translateY(0);
 }
 
@@ -457,6 +459,38 @@ video {
   z-index: 2147483647;
   pointer-events: none;
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='24' viewBox='0 0 18 24'%3E%3Cpath d='M1 1v18l4.5-4 3.5 8 3-1.5-3.5-7.5H16Z' fill='%23000' stroke='%23fff' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat;
+}
+
+/* In-page select options stay usable while the system cursor is locked. */
+.locked-select-menu {
+  position: fixed;
+  z-index: 2147483646;
+  max-width: calc(100vw - 16px);
+  max-height: min(240px, calc(100vh - 16px));
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: #111827;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.locked-select-option {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #fff;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.locked-select-option[aria-selected="true"],
+.locked-select-option:focus-visible {
+  background: #374151;
 }
 
 /* Connecting overlay */
@@ -588,7 +622,8 @@ video {
   pointer-events: auto;
 }
 
-.panel-collapsed-bar:hover {
+.panel-collapsed-bar:hover,
+.panel-collapsed-bar.pointer-lock-hover {
   background: #f8fafc;
 }
 

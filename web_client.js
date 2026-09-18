@@ -973,6 +973,7 @@ function connect() {
 
 function disconnect() {
   if (!elements.connectBtn || !elements.disconnectBtn || !elements.media) return;
+  control?.setDataChannel(null);
   isConnectionSessionActive = false;
   clearConnectionTimeout();
   clearIceDisconnectedTimeout();
@@ -1345,7 +1346,8 @@ function hideConnectedPanel() {
   }
   panelHideTimer = setTimeout(() => {
     panelHideTimer = null;
-    if (elements.connectedPanel && !isPanelMinimized && !isDragging) {
+    if (elements.connectedPanel && !isPanelMinimized && !isDragging &&
+        !elements.connectedPanel.classList.contains("pointer-lock-within")) {
       minimizePanel();
     }
   }, PANEL_HIDE_DELAY);
@@ -1495,6 +1497,7 @@ if (elements.connectedOverlay) {
     } else if (
       !isDragging &&
       !elements.connectedPanel?.matches(":hover") &&
+      !elements.connectedPanel?.classList.contains("pointer-lock-within") &&
       !isPanelMinimized
     ) {
       hideConnectedPanel();
@@ -1561,6 +1564,12 @@ if (elements.connectedOverlay) {
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
         
+        if (upEvent.crossdeskPointerCancelled) {
+          panelDragStarted = false;
+          control?.setDraggingPanel(false);
+          return;
+        }
+
         // If it was a quick click (not a drag), handle it immediately
         const clickDuration = Date.now() - panelDragStartTime;
         const deltaX = Math.abs(upEvent.clientX - panelDragStartPos.x);
