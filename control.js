@@ -55,11 +55,16 @@
         virtualMouseRestore: document.getElementById("virtual-mouse-restore"),
       };
 
+      this.pressedMouseButtons = new Set();
+      this.lockedCursor = null;
+
       this.virtualKeyTimers = new Map(); // Store timers for each key element
       this.virtualScrollTimers = new Map(); // Store timers for scroll buttons
 
       this.state = {
         pointerLocked: false,
+        pointerLockFailed: false,
+        lockedPointerPos: null,
         normalizedPos: { x: 0.5, y: 0.5 },
         lastPointerPos: null,
         lastWheelAt: 0,
@@ -142,6 +147,16 @@
     }
 
     setDataChannel(channel) {
+      if (channel !== this.dataChannel) {
+        this.releaseMouseButtons();
+        if (!channel && this.state.pointerLocked) {
+          document.exitPointerLock?.();
+          this.resetLockedPointer();
+        }
+        this.state.pointerLockFailed = false;
+        this.state.lastPointerPos = null;
+        this.state.desktopPointerCalibrated = false;
+      }
       this.dataChannel = channel;
     }
 
@@ -233,6 +248,10 @@
     bindPointerLockEvents() {
       document.addEventListener("pointerlockchange", this.onPointerLockChange);
       document.addEventListener("pointerlockerror", this.onPointerLockError);
+      window.addEventListener?.("resize", () => {
+        if (this.state.pointerLocked) this.updateLockedPointer(0, 0);
+      });
+      window.addEventListener?.("blur", () => this.releaseMouseButtons());
       document.addEventListener("keydown", (event) => {
         if (event.ctrlKey && event.key === "Escape") {
           document.exitPointerLock?.();
@@ -244,21 +263,84 @@
       this.state.pointerLocked =
         document.pointerLockElement === this.elements.video;
       if (this.state.pointerLocked) {
-        this.state.videoRect =
-          this.elements.video
-            ? this.getRenderedVideoContentRect(this.elements.video)
-            : null;
+        this.state.pointerLockFailed = false;
+        this.ensureVideoRect();
+        this.updateLockedPointer(0, 0);
       } else {
+        this.releaseMouseButtons();
+        this.resetLockedPointer();
         this.state.videoRect = null;
         this.showPointerLockToast(
-          "已退出鼠标锁定，按 Esc 或点击视频重新锁定（释放可按 Ctrl+Esc）",
+          "已退出鼠标锁定，点击远程画面重新锁定",
           3000,
         );
       }
     }
 
+    resetLockedPointer() {
+      this.state.pointerLocked = false;
+      this.state.lockedPointerPos = null;
+      if (this.lockedCursor) this.lockedCursor.style.display = "none";
+    }
+
+    getPointerPosition(event) {
+      return this.state.pointerLocked && this.state.lockedPointerPos
+        ? this.state.lockedPointerPos
+        : { x: event.clientX, y: event.clientY };
+    }
+
+    updateLockedPointer(dx, dy) {
+      this.ensureVideoRect();
+      const rect = this.state.videoRect;
+      if (!rect) return;
+      const previous = this.state.lockedPointerPos || {
+        x: rect.left + this.state.normalizedPos.x * rect.width,
+        y: rect.top + this.state.normalizedPos.y * rect.height,
+      };
+      // Keep a viewport position independent of the remote desktop's bounds.
+      // Pointer Lock's clientX/clientY remain frozen at the initial click.
+      const pos = {
+        x: Math.max(0, Math.min(
+          window.innerWidth - 1,
+          previous.x + (Number.isFinite(dx) ? dx : 0),
+        )),
+        y: Math.max(0, Math.min(
+          window.innerHeight - 1,
+          previous.y + (Number.isFinite(dy) ? dy : 0),
+        )),
+      };
+      this.state.lockedPointerPos = pos;
+      const showCursor = !this.isInsideVideo(pos.x, pos.y) ||
+        this.isInsidePanel(pos.x, pos.y);
+      if (showCursor && !this.lockedCursor) {
+        this.lockedCursor = document.createElement("div");
+        this.lockedCursor.className = "locked-pointer-cursor";
+        this.lockedCursor.setAttribute("aria-hidden", "true");
+        document.body.appendChild(this.lockedCursor);
+      }
+      if (this.lockedCursor) {
+        this.lockedCursor.style.display = showCursor ? "block" : "none";
+        this.lockedCursor.style.transform = `translate(${pos.x}px, ${pos.y}px)`;
+      }
+    }
+
+    releaseMouseButtons() {
+      for (const button of this.pressedMouseButtons) {
+        this.sendMouseAction({
+          ...this.state.normalizedPos,
+          flag: this.buttonToFlag(button, false),
+        });
+      }
+      this.pressedMouseButtons.clear();
+      this.state.lastPointerPos = null;
+    }
+
     onPointerLockError() {
-      this.showPointerLockToast("鼠标锁定失败", 2500);
+      if (this.state.pointerLocked || !this.isChannelOpen()) return;
+      if (!this.state.pointerLockFailed) {
+        this.showPointerLockToast("鼠标锁定未成功，已切换普通鼠标控制", 2500);
+      }
+      this.state.pointerLockFailed = true;
     }
 
     bindPointerListeners() {
@@ -298,225 +380,111 @@
     }
 
     onPointerDown(event) {
-      if (event.pointerType === "touch") return;
+      if (event.pointerType === "touch" || !this.isChannelOpen()) return;
 
       const button = typeof event.button === "number" ? event.button : 0;
-      if (button < 0) return;
-
-      // Skip if touching panel elements
-      const target = event.target;
-      if (
-        target &&
-        (target.closest("#panel-collapsed-bar") ||
-          target.closest("#connected-panel"))
-      ) {
-        return;
-      }
-
-      // Skip if clicking inside panel area
-      if (this.isInsidePanel(event.clientX, event.clientY)) {
-        return;
-      }
-
-      // Skip if dragging panel
-      if (this.state.draggingPanel) {
-        return;
-      }
+      if (button < 0 || button > 2) return;
+      const { x, y } = this.getPointerPosition(event);
+      this.ensureVideoRect();
+      if (this.state.draggingPanel || this.isInsidePanel(x, y) ||
+          !this.isInsideVideo(x, y)) return;
 
       event.preventDefault?.();
+      this.updateNormalizedFromClient(x, y);
       if (!this.state.pointerLocked) {
-        this.state.lastPointerPos = { x: event.clientX, y: event.clientY };
-        this.ensureVideoRect();
-        const insideVideo =
-          this.state.videoRect &&
-          this.isInsideVideo(event.clientX, event.clientY);
-        if (!insideVideo) {
-          // Ignore desktop mouse down outside video area when pointer is not locked.
-          return;
-        }
-
-        // While unlocked, clicks should sync to the current client position.
-        this.updateNormalizedFromClient(event.clientX, event.clientY);
-
-        // First desktop click: send a move first to calibrate remote cursor position.
+        this.state.lastPointerPos = { x, y };
+        // Save the real click before Pointer Lock freezes client coordinates.
+        this.state.lockedPointerPos = { x, y };
         if (!this.state.desktopPointerCalibrated) {
           this.state.desktopPointerCalibrated = true;
           this.sendMouseAction({
-            x: this.state.normalizedPos.x,
-            y: this.state.normalizedPos.y,
+            ...this.state.normalizedPos,
             flag: MouseFlag.move,
           });
         }
-
         this.requestPointerLock();
-      }
-
-      // Try to capture pointer, but handle errors gracefully
-      if (
-        this.elements.video &&
-        event.pointerId !== undefined &&
-        event.pointerId !== null
-      ) {
-        try {
-          this.elements.video.setPointerCapture(event.pointerId);
-        } catch (err) {
-          // Ignore errors (e.g., element not in document, pointer already captured, etc.)
-          // console.warn("setPointerCapture failed:", err);
+        if (event.pointerId != null) {
+          try {
+            this.elements.video.setPointerCapture(event.pointerId);
+          } catch (err) {
+            // The pointer may have been locked or cancelled in the meantime.
+          }
         }
       }
 
+      this.pressedMouseButtons.add(button);
       this.sendMouseAction({
-        x: this.state.normalizedPos.x,
-        y: this.state.normalizedPos.y,
+        ...this.state.normalizedPos,
         flag: this.buttonToFlag(button, true),
       });
     }
 
     onPointerMove(event) {
       if (event.pointerType === "touch") return;
-
-      // Skip if touching panel elements
-      const target = event.target;
-      if (
-        target &&
-        (target.closest("#panel-collapsed-bar") ||
-          target.closest("#connected-panel"))
-      ) {
-        return;
+      if (this.state.pointerLocked) {
+        this.updateLockedPointer(event.movementX, event.movementY);
       }
+      if (this.isDraggingAnyElement() || this.state.pinchZoomActive) return;
+      if (!this.state.pointerLocked && !this.state.lastPointerPos &&
+          !this.state.pointerLockFailed) return;
 
-      // Skip if moving inside panel area
-      if (this.isInsidePanel(event.clientX, event.clientY)) {
-        return;
-      }
-
-      // Skip if dragging panel
-      if (this.state.draggingPanel) {
-        return;
-      }
-
-      // Skip if pinch zoom is active
-      if (this.state.pinchZoomActive) {
-        return;
-      }
-
-      // 桌面端处理
-      if (!this.state.pointerLocked && !this.state.lastPointerPos) return;
-
-      const movementX = this.state.pointerLocked
-        ? event.movementX
-        : event.clientX - (this.state.lastPointerPos?.x ?? event.clientX);
-      const movementY = this.state.pointerLocked
-        ? event.movementY
-        : event.clientY - (this.state.lastPointerPos?.y ?? event.clientY);
-
-      if (!this.state.pointerLocked) {
-        this.state.lastPointerPos = { x: event.clientX, y: event.clientY };
-      }
-
+      const { x, y } = this.getPointerPosition(event);
       this.ensureVideoRect();
       if (!this.state.videoRect) return;
-
-      if (this.state.pointerLocked) {
-        this.state.normalizedPos.x = clamp01(
-          this.state.normalizedPos.x + movementX / this.state.videoRect.width,
-        );
-        this.state.normalizedPos.y = clamp01(
-          this.state.normalizedPos.y + movementY / this.state.videoRect.height,
-        );
-        this.sendMouseAction({
-          x: this.state.normalizedPos.x,
-          y: this.state.normalizedPos.y,
-          flag: MouseFlag.move,
-        });
-        return;
-      }
-
-      if (!this.isInsideVideo(event.clientX, event.clientY)) return;
-      const x =
-        (event.clientX - this.state.videoRect.left) /
-        this.state.videoRect.width;
-      const y =
-        (event.clientY - this.state.videoRect.top) /
-        this.state.videoRect.height;
-      this.state.normalizedPos = { x: clamp01(x), y: clamp01(y) };
+      // An existing remote drag can reach the edge and must still be released
+      // outside the video. Hovering over letterboxing never controls the host.
+      if (!this.pressedMouseButtons.size &&
+          (this.isInsidePanel(x, y) || !this.isInsideVideo(x, y))) return;
+      if (!this.state.pointerLocked) this.state.lastPointerPos = { x, y };
+      this.updateNormalizedFromClient(x, y);
       this.sendMouseAction({
-        x: this.state.normalizedPos.x,
-        y: this.state.normalizedPos.y,
+        ...this.state.normalizedPos,
         flag: MouseFlag.move,
       });
     }
 
     onPointerUp(event) {
       if (event.pointerType === "touch") return;
-
-      // Skip if releasing inside panel area
-      if (this.isInsidePanel(event.clientX, event.clientY)) {
-        this.elements.video?.releasePointerCapture?.(event.pointerId ?? 0);
-        return;
-      }
-
       const button = typeof event.button === "number" ? event.button : 0;
-      if (!this.state.pointerLocked) {
-        this.ensureVideoRect();
-        if (
-          this.state.videoRect &&
-          this.isInsideVideo(event.clientX, event.clientY)
-        ) {
-          this.updateNormalizedFromClient(event.clientX, event.clientY);
-        }
+      // A press in the black border or local UI must not release/click remotely.
+      if (!this.pressedMouseButtons.delete(button)) return;
+      const { x, y } = this.getPointerPosition(event);
+      this.ensureVideoRect();
+      this.updateNormalizedFromClient(x, y);
+      try {
+        this.elements.video?.releasePointerCapture?.(event.pointerId ?? 0);
+      } catch (err) {
+        // Pointer Lock or cancellation may already have released capture.
       }
-      this.elements.video?.releasePointerCapture?.(event.pointerId ?? 0);
       this.state.lastPointerPos = null;
       this.sendMouseAction({
-        x: this.state.normalizedPos.x,
-        y: this.state.normalizedPos.y,
+        ...this.state.normalizedPos,
         flag: this.buttonToFlag(button, false),
       });
     }
 
     onPointerCancel(event) {
       if (event.pointerType === "touch") return;
-      this.state.lastPointerPos = null;
+      this.releaseMouseButtons();
     }
 
     onWheel(event) {
       const now = Date.now();
       if (now - this.state.lastWheelAt < 50) return;
       this.state.lastWheelAt = now;
-
-      // Skip if wheeling inside panel area
-      if (this.isInsidePanel(event.clientX, event.clientY)) {
-        return;
-      }
-
+      const { x, y } = this.getPointerPosition(event);
       this.ensureVideoRect();
-      if (!this.state.videoRect) return;
-
-      let coords = this.state.normalizedPos;
-      if (!this.state.pointerLocked) {
-        if (!this.isInsideVideo(event.clientX, event.clientY)) return;
-        coords = {
-          x:
-            (event.clientX - this.state.videoRect.left) /
-            this.state.videoRect.width,
-          y:
-            (event.clientY - this.state.videoRect.top) /
-            this.state.videoRect.height,
-        };
-      }
+      if (this.isInsidePanel(x, y) || !this.isInsideVideo(x, y)) return;
+      this.updateNormalizedFromClient(x, y);
 
       const isHorizontalWheel = event.deltaY === 0;
       const scrollDelta = isHorizontalWheel ? event.deltaX : -event.deltaY;
-
       this.sendMouseAction({
-        x: coords.x,
-        y: coords.y,
+        ...this.state.normalizedPos,
         flag: isHorizontalWheel
           ? MouseFlag.wheel_horizontal
           : MouseFlag.wheel_vertical,
-        // Browser deltaY is positive when scrolling down, while the remote
-        // mouse protocol uses positive values for scrolling up.
+        // Browser deltaY is positive when scrolling down; the host uses up.
         scroll: scrollDelta,
       });
       event.preventDefault();
@@ -709,10 +677,20 @@
     }
 
     requestPointerLock() {
+      const video = this.elements.video;
+      if (typeof video?.requestPointerLock !== "function") {
+        this.onPointerLockError();
+        return;
+      }
+      const channel = this.dataChannel;
+      const onFailure = () => {
+        if (this.dataChannel === channel) this.onPointerLockError();
+      };
       try {
-        this.elements.video?.requestPointerLock?.();
+        // Older browsers return void; newer ones can reject asynchronously.
+        video.requestPointerLock()?.catch?.(onFailure);
       } catch (err) {
-        console.warn("CrossDeskControl: requestPointerLock failed", err);
+        onFailure();
       }
     }
 
