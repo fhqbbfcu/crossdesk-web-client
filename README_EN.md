@@ -98,7 +98,7 @@ See GitHub's [publishing source instructions](https://docs.github.com/en/pages/g
 
 ### View and update the Web version
 
-The connection form footer and expanded session control panel show the Web version, for example **Web 2026.09.24.1**. Use `year.month.day.release-number`, incrementing the last number for another release on the same day. The loaded `web_client.js` supplies the label, even when signaling is unavailable.
+The connection form footer and expanded session control panel show the Web version, for example **version 2026.09.24.1**. Use `year.month.day.release-number`, incrementing the last number for another release on the same day. The loaded `web_client.js` supplies the label, even when signaling is unavailable.
 
 Before each release, run from the repository root (requires Node.js):
 

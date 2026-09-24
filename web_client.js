@@ -1,5 +1,5 @@
 // Update this and the asset cache keys with: node scripts/set-version.js <version>
-const WEB_CLIENT_VERSION = "2026.09.24.1";
+const WEB_CLIENT_VERSION = "2026.09.24.2";
 
 const elements = {
   clientVersion: document.getElementById("client-version"),
@@ -31,7 +31,7 @@ const elements = {
 
 for (const label of [elements.clientVersion, elements.connectedClientVersion]) {
   if (!label) continue;
-  label.textContent = `Web ${WEB_CLIENT_VERSION}`;
+  label.textContent = `version ${WEB_CLIENT_VERSION}`;
   label.hidden = false;
 }
 
