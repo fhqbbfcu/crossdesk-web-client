@@ -37,9 +37,9 @@ for (const label of [elements.clientVersion, elements.connectedClientVersion]) {
 
 // Config section (can be overridden by setting window.CROSSDESK_CONFIG before this script runs)
 const DEFAULT_CONFIG = {
-  signalingUrl: "wss://api.crossdesk.cn:9099",
+  signalingUrl: "wss://121.4.104.2:9099",
   iceServers: [
-    { urls: ["stun:api.crossdesk.cn:3478"] },
+    { urls: ["stun:121.4.104.2:4478"] },
   ],
   heartbeatIntervalMs: 3000,
   heartbeatTimeoutMs: 10000,
