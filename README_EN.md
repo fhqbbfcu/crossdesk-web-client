@@ -96,6 +96,18 @@ Open the [local page](http://127.0.0.1:8080/) and press Ctrl+C in the terminal t
 
 See GitHub's [publishing source instructions](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site) and [HTTPS documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/securing-your-github-pages-site-with-https).
 
+### View and update the Web version
+
+The connection form footer and expanded session control panel show the Web version, for example **Web 2026.09.24.1**. Use `year.month.day.release-number`, incrementing the last number for another release on the same day. The loaded `web_client.js` supplies the label, even when signaling is unavailable.
+
+Before each release, run from the repository root (requires Node.js):
+
+```bash
+node scripts/set-version.js 2026.09.24.2
+```
+
+This updates the version in `web_client.js` and the CSS / JS `?v=` cache keys in `index.html`. Commit and deploy the generated changes together with the release, then refresh the live page and confirm its displayed version. Include these files in manual deployments too; preserve the current `?v=` parameters when adapting the configuration example below.
+
 ### Other static hosting
 
 Upload these resources to your HTTPS site, preserving their relative paths. The entry point is `index.html`:
@@ -173,7 +185,6 @@ Normally, configure only STUN in `iceServers`. The signaling service sends tempo
 | `reconnectMaxDelayMs` | `30000` | Maximum signaling retry delay |
 | `reconnectMaxAttempts` | `8` | Consecutive signaling retry limit; resets when WebSocket opens |
 | `connectionTimeoutMs` | `20000` | Remote-session connection timeout |
-| `iceGatheringTimeoutMs` | `10000` | Timeout for ICE gathering to complete |
 | `iceDisconnectedTimeoutMs` | `5000` | Recovery window after a transient ICE disconnection |
 | `interactionGuardEnabled` | `true` | Suppress default browser interactions in the selected scope |
 | `interactionGuardScope` | `"video"` | Scope: `video` / `global` / `none`; input fields remain editable |
@@ -212,6 +223,7 @@ All `Ms` values are in milliseconds. Interaction guards prevent browser actions 
 | [turn_credentials.js](turn_credentials.js) | TURN credential validation and ICE configuration generation |
 | [tests/turn_credentials_test.js](tests/turn_credentials_test.js) | TURN credential parser tests |
 | [tests/control_touch_test.js](tests/control_touch_test.js) | Touch click, movement, and zoom event regression tests |
+| [tests/web_client_signaling_test.js](tests/web_client_signaling_test.js) | Prompt answer delivery, trickled candidates, and connection cancellation tests |
 | [vendor/README.md](vendor/README.md) | WebRTC Adapter version and source |
 
 With Node.js installed, run the existing tests and syntax checks without installing dependencies:
@@ -219,12 +231,13 @@ With Node.js installed, run the existing tests and syntax checks without install
 ```bash
 node tests/turn_credentials_test.js
 node tests/control_touch_test.js
+node --test tests/web_client_signaling_test.js
 node --check web_client.js
 node --check control.js
 node --check turn_credentials.js
 ```
 
-These checks cover credential parsing, simulated touch events, and script syntax, not live connectivity, media, or input. After changing connection or touch logic, use a desktop host on the same service to verify direct / TURN connections, display switching, disconnect/reconnect behavior, and the relevant input devices.
+These checks cover credential parsing, simulated touch events, simulated WebRTC signaling, and script syntax, not live connectivity, media, or input. After changing connection or touch logic, use a desktop host on the same service to verify direct / TURN connections, display switching, disconnect/reconnect behavior, and the relevant input devices.
 
 WebRTC Adapter is pinned to **9.0.1**. The page first loads `vendor/adapter-9.0.1.min.js`, then falls back to the same version on jsDelivr if local loading fails. Include the `vendor` asset in deployments, and update the local file and [index.html](index.html) fallback together when changing versions.
 

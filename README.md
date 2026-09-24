@@ -96,6 +96,18 @@ python3 -m http.server 8080 --bind 127.0.0.1
 
 具体发布入口见 [GitHub Pages 发布源说明](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)，证书和 HTTPS 设置见 [GitHub HTTPS 说明](https://docs.github.com/en/pages/getting-started-with-github-pages/securing-your-github-pages-site-with-https)。
 
+### 查看和更新 Web 版本
+
+连接表单底部和连接后的展开控制面板显示 Web 版本，例如 **Web 2026.09.24.1**。采用 `年.月.日.当天发布序号`，同一天再次发布时递增最后一位。版本标签由当前加载的 `web_client.js` 填写，不依赖信令连接是否成功。
+
+每次发布前，在仓库根目录执行（需要 Node.js）：
+
+```bash
+node scripts/set-version.js 2026.09.24.2
+```
+
+该命令同步更新 `web_client.js` 中的版本号和 `index.html` 中 CSS / JS 的 `?v=` 缓存参数。将生成的改动与本次代码一起提交并部署，完成后刷新线上页面，确认显示的版本号与本次发布一致。手动部署时也需同步上传这些文件；修改下方自定义配置示例时，应保留当前资源标签上的 `?v=` 参数。
+
 ### 其他静态托管
 
 将以下资源按原有相对路径上传到 HTTPS 站点目录，入口为 `index.html`：
@@ -173,7 +185,6 @@ manifest.json
 | `reconnectMaxDelayMs` | `30000` | 信令重连延迟上限 |
 | `reconnectMaxAttempts` | `8` | 连续信令重连尝试上限，WebSocket 打开后重置计数 |
 | `connectionTimeoutMs` | `20000` | 远程会话连接超时 |
-| `iceGatheringTimeoutMs` | `10000` | 等待 ICE 候选收集完成的超时 |
 | `iceDisconnectedTimeoutMs` | `5000` | ICE 短暂断开后的恢复等待时间 |
 | `interactionGuardEnabled` | `true` | 是否拦截指定区域的浏览器默认交互 |
 | `interactionGuardScope` | `"video"` | 拦截区域：`video` / `global` / `none`；输入框保留编辑能力 |
@@ -212,6 +223,7 @@ manifest.json
 | [turn_credentials.js](turn_credentials.js) | 动态 TURN 凭据校验与 ICE 配置生成 |
 | [tests/turn_credentials_test.js](tests/turn_credentials_test.js) | TURN 凭据解析测试 |
 | [tests/control_touch_test.js](tests/control_touch_test.js) | 触控点击、移动与缩放的事件回归测试 |
+| [tests/web_client_signaling_test.js](tests/web_client_signaling_test.js) | Answer 及时发送、候选补发与连接取消的信令回归测试 |
 | [vendor/README.md](vendor/README.md) | WebRTC Adapter 的版本与来源 |
 
 安装 Node.js 后，可以直接运行现有测试和语法检查，无需安装依赖：
@@ -219,12 +231,13 @@ manifest.json
 ```bash
 node tests/turn_credentials_test.js
 node tests/control_touch_test.js
+node --test tests/web_client_signaling_test.js
 node --check web_client.js
 node --check control.js
 node --check turn_credentials.js
 ```
 
-这些检查覆盖凭据解析、模拟触控事件与脚本语法，不能替代真实设备上的连接、音视频和输入测试。修改连接或触控逻辑后，应使用同一服务上的桌面端验证直连 / TURN、画面切换、断开重连和对应输入设备。
+这些检查覆盖凭据解析、模拟触控事件、模拟 WebRTC 信令与脚本语法，不能替代真实设备上的连接、音视频和输入测试。修改连接或触控逻辑后，应使用同一服务上的桌面端验证直连 / TURN、画面切换、断开重连和对应输入设备。
 
 WebRTC Adapter 固定为 **9.0.1**：页面优先加载本地 `vendor/adapter-9.0.1.min.js`，失败时回退到同版本的 jsDelivr 地址。部署时保留 `vendor` 资源，版本更新时同时核对本地文件与 [index.html](index.html) 中的回退地址。
 

@@ -81,7 +81,7 @@
     <!-- PWA Manifest (可选，用于更好的Web App体验) -->
     <link rel="manifest" href="manifest.json" />
 
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=2026.09.24.1" />
     <script
       src="vendor/adapter-9.0.1.min.js"
       onload="console.info('[CrossDesk] Loaded WebRTC adapter from local: vendor/adapter-9.0.1.min.js');"
@@ -148,6 +148,7 @@
               <button id="disconnect" type="button" style="display: none">断开连接</button>
             </div>
           </form>
+          <p id="client-version" class="client-version" aria-label="Web 客户端版本" hidden></p>
         </div>
       </div>
 
@@ -264,6 +265,7 @@
                     </div>
                   </div>
                 </div>
+                <p id="connected-client-version" class="client-version" aria-label="Web 客户端版本" hidden></p>
               </div>
             </div>
           </div>
@@ -376,8 +378,8 @@
     </div>
 
 
-    <script src="control.js"></script>
-    <script src="turn_credentials.js"></script>
-    <script src="web_client.js"></script>
+    <script src="control.js?v=2026.09.24.1"></script>
+    <script src="turn_credentials.js?v=2026.09.24.1"></script>
+    <script src="web_client.js?v=2026.09.24.1"></script>
   </body>
 </html>

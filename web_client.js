@@ -1,4 +1,9 @@
+// Update this and the asset cache keys with: node scripts/set-version.js <version>
+const WEB_CLIENT_VERSION = "2026.09.24.1";
+
 const elements = {
+  clientVersion: document.getElementById("client-version"),
+  connectedClientVersion: document.getElementById("connected-client-version"),
   connectionForm: document.getElementById("connection-form"),
   transmissionIdInput: document.getElementById("transmission-id"),
   transmissionPwdInput: document.getElementById("transmission-pwd"),
@@ -24,6 +29,12 @@ const elements = {
   disconnectConnected: document.getElementById("disconnect-connected"),
 };
 
+for (const label of [elements.clientVersion, elements.connectedClientVersion]) {
+  if (!label) continue;
+  label.textContent = `Web ${WEB_CLIENT_VERSION}`;
+  label.hidden = false;
+}
+
 // Config section (can be overridden by setting window.CROSSDESK_CONFIG before this script runs)
 const DEFAULT_CONFIG = {
   signalingUrl: "wss://api.crossdesk.cn:9099",
@@ -36,7 +47,6 @@ const DEFAULT_CONFIG = {
   reconnectMaxDelayMs: 30000,
   reconnectMaxAttempts: 8,
   connectionTimeoutMs: 20000,
-  iceGatheringTimeoutMs: 10000,
   iceDisconnectedTimeoutMs: 5000,
   interactionGuardEnabled: true,
   interactionGuardScope: "video", // "video" | "global" | "none"
@@ -86,10 +96,6 @@ const RECONNECT_MAX_ATTEMPTS = Number.isFinite(Number(CONFIG.reconnectMaxAttempt
 const CONNECTION_TIMEOUT_MS = Math.max(
   1000,
   Number(CONFIG.connectionTimeoutMs) || 20000
-);
-const ICE_GATHERING_TIMEOUT_MS = Math.max(
-  1000,
-  Number(CONFIG.iceGatheringTimeoutMs) || 10000
 );
 const ICE_DISCONNECTED_TIMEOUT_MS = Math.max(
   1000,
@@ -717,7 +723,7 @@ function createPeerConnection() {
   updateStatusLed(elements.connectedStatusLed, isConnected, false);
 
   peer.onicecandidate = ({ candidate }) => {
-    if (!candidate) return;
+    if (!isConnectionSessionActive || peer !== pc || !candidate) return;
     sendSignaling(
       {
         type: "new_candidate_mid",
@@ -840,8 +846,14 @@ function bindDataChannel(channel) {
 }
 
 async function sendAnswer(peer) {
-  await peer.setLocalDescription(await peer.createAnswer());
-  await waitIceGathering(peer, ICE_GATHERING_TIMEOUT_MS);
+  const answer = await peer.createAnswer();
+  if (!isConnectionSessionActive || peer !== pc) return;
+  await peer.setLocalDescription(answer);
+  if (!isConnectionSessionActive || peer !== pc) return;
+
+  // The desktop starts gathering after receiving our answer. Send it now;
+  // onicecandidate trickles candidates as they arrive, even if a STUN/TURN
+  // server is slow or unreachable. The overall connection timeout still applies.
   const sent = sendSignaling(
     {
       type: "answer",
@@ -860,25 +872,6 @@ async function sendAnswer(peer) {
   if (!sent) {
     throw new Error("Failed to send answer");
   }
-}
-
-function waitIceGathering(peer, timeoutMs) {
-  if (peer.iceGatheringState === "complete") {
-    return Promise.resolve();
-  }
-  return new Promise((resolve, reject) => {
-    const onStateChange = () => {
-      if (peer.iceGatheringState !== "complete") return;
-      clearTimeout(timeoutTimer);
-      peer.removeEventListener("icegatheringstatechange", onStateChange);
-      resolve();
-    };
-    const timeoutTimer = setTimeout(() => {
-      peer.removeEventListener("icegatheringstatechange", onStateChange);
-      reject(new Error("ICE gathering timed out"));
-    }, timeoutMs);
-    peer.addEventListener("icegatheringstatechange", onStateChange);
-  });
 }
 
 function getTransmissionId() {
