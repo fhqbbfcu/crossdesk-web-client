@@ -1,5 +1,5 @@
 // Update this and the asset cache keys with: node scripts/set-version.js <version>
-const WEB_CLIENT_VERSION = "2026.09.24.2";
+const WEB_CLIENT_VERSION = "2026.10.16.2";
 
 const elements = {
   clientVersion: document.getElementById("client-version"),
@@ -88,6 +88,149 @@ const CONNECT_BUTTON_DEFAULT_TEXT = elements.connectBtn
   : "连接";
 let trackIndex = 0; // Track index for display_id (0, 1, 2, ...)
 const trackMap = new Map(); // Map<index, track> - stores tracks by their display_id index
+
+class BrowserQosSession {
+  constructor(peer) {
+    this.peer = peer;
+    this.channel = null;
+    this.timer = null;
+    this.closed = false;
+    this.busy = false;
+    this.previous = new Map();
+    this.lastDecoded = new Map();
+    this.sequence = 0;
+    this.sender = null;
+  }
+
+  attach(channel) {
+    if (this.closed) return;
+    this.channel = channel;
+    const start = () => {
+      if (this.closed || this.timer !== null || typeof this.peer.getStats !== "function") return;
+      this.previous.clear();
+      this.lastDecoded.clear();
+      this.timer = setInterval(() => void this.sample(), 500);
+      void this.sample();
+    };
+    channel.addEventListener("open", start);
+    channel.addEventListener("close", () => {
+      if (this.channel !== channel) return;
+      if (this.timer !== null) clearInterval(this.timer);
+      this.timer = null;
+      this.channel = null;
+    });
+    channel.addEventListener("message", ({ data }) => {
+      if (this.closed || this.channel !== channel) return;
+      if (typeof data !== "string" || data.length > 4096) return;
+      try {
+        const report = JSON.parse(data);
+        if (report.type === "web_qos_status" && report.version === 1) this.sender = report;
+      } catch (err) {}
+    });
+    if (channel.readyState === "open") start();
+  }
+
+  async sample() {
+    if (this.busy || this.closed || this.peer !== pc) return;
+    this.busy = true;
+    try {
+      const stats = await this.peer.getStats();
+      if (this.closed || this.peer !== pc) return;
+      const next = new Map();
+      let packets = 0, lost = 0, jitterMs = 0, decodeMs = 0, fps = 0;
+      let frozen = false, sampled = false, rttMs = 0, pair = null;
+      let receivedBps = 0;
+      const displayedTrack = elements.video?.srcObject?.getVideoTracks?.()[0]?.id;
+      stats.forEach((report) => {
+        if (report.type === "transport" && report.selectedCandidatePairId)
+          pair = stats.get(report.selectedCandidatePairId) || pair;
+        if (report.type !== "inbound-rtp" ||
+            (report.kind || report.mediaType) !== "video") return;
+        next.set(report.id, report);
+        const prev = this.previous.get(report.id);
+        if (!prev) {
+          this.lastDecoded.set(report.id, report.timestamp);
+          return;
+        }
+        const elapsed = (report.timestamp - prev.timestamp) / 1000;
+        if (!(elapsed > 0 && elapsed <= 5)) return;
+        const delta = (key) => Number.isFinite(report[key]) && Number.isFinite(prev[key]) &&
+          report[key] >= prev[key] ? report[key] - prev[key] : 0;
+        // Counters reset on a new SSRC/decoder; never mix across epochs.
+        if (report.packetsReceived < prev.packetsReceived ||
+            report.framesDecoded < prev.framesDecoded) {
+          this.lastDecoded.set(report.id, report.timestamp);
+          return;
+        }
+        sampled = true;
+        const received = delta("packetsReceived"), missing = delta("packetsLost");
+        packets += received + missing;
+        lost += missing;
+        receivedBps += delta("bytesReceived") * 8 / elapsed;
+        // All tracks consume bandwidth, but an unselected display may not be
+        // decoded by the browser. It must not be mistaken for a frozen screen.
+        if (displayedTrack && report.trackIdentifier &&
+            report.trackIdentifier !== displayedTrack) return;
+        const frames = delta("framesDecoded");
+        if (frames) this.lastDecoded.set(report.id, report.timestamp);
+        // freezeCount may update only after playback resumes. Detect an
+        // ongoing decoder/network stall as well, using this report's clock.
+        if (report.packetsReceived > 0 &&
+            report.timestamp - this.lastDecoded.get(report.id) >= 1500) frozen = true;
+        const emitted = delta("jitterBufferEmittedCount");
+        if (emitted) jitterMs = Math.max(jitterMs, delta("jitterBufferDelay") * 1000 / emitted);
+        if (frames) decodeMs = Math.max(decodeMs, delta("totalDecodeTime") * 1000 / frames);
+        fps = Math.max(fps, frames / elapsed);
+        frozen ||= delta("freezeCount") > 0;
+      });
+      this.previous = next;
+      for (const id of this.lastDecoded.keys()) {
+        if (!next.has(id)) this.lastDecoded.delete(id);
+      }
+      if (!pair) stats.forEach((report) => {
+        if (report.type === "candidate-pair" && report.state === "succeeded" &&
+            (report.nominated || report.selected)) pair = report;
+      });
+      if (Number.isFinite(pair?.currentRoundTripTime)) rttMs = Math.round(pair.currentRoundTripTime * 1000);
+      const channel = this.channel;
+      if (!sampled || channel?.readyState !== "open" || channel.bufferedAmount > 4096) return;
+      const report = { type: "web_qos", version: 1, sequence: ++this.sequence,
+        packets, lost, rtt_ms: rttMs, jitter_ms: jitterMs,
+        decode_ms: decodeMs, fps, frozen };
+      channel.send(JSON.stringify(report));
+      const remote = pair ? stats.get(pair.remoteCandidateId) : null;
+      const local = pair ? stats.get(pair.localCandidateId) : null;
+      const relay = remote?.candidateType === "relay" || local?.candidateType === "relay";
+      const diagnostics = { ...report, received_bps: Math.round(receivedBps),
+        route: relay ? "relay" : "direct", protocol: local?.relayProtocol || local?.protocol,
+        sender: this.sender };
+      window.CrossDeskStats = diagnostics;
+      const label = document.getElementById("connection-quality");
+      if (label) {
+        label.hidden = false;
+        label.textContent = `${Math.round(fps)} fps · ${rttMs} ms · ${relay ? "中继" : "直连"}`;
+        label.title = `画面缓冲 ${Math.round(jitterMs)} ms，解码 ${Math.round(decodeMs)} ms，` +
+          `接收 ${(receivedBps / 1000000).toFixed(2)} Mbps，丢包 ${(packets ? lost / packets * 100 : 0).toFixed(1)}%`;
+      }
+    } catch (err) {
+      // Missing stats or a closing channel must not interrupt remote control.
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  close() {
+    this.closed = true;
+    if (this.timer !== null) clearInterval(this.timer);
+    this.timer = null;
+    this.channel = null;
+    this.previous.clear();
+    this.lastDecoded.clear();
+    window.CrossDeskStats = null;
+    const label = document.getElementById("connection-quality");
+    if (label) label.hidden = true;
+  }
+}
 
 const SignalingConnectionState = Object.freeze({
   connecting: "connecting",
@@ -686,6 +829,14 @@ function sendLogin() {
 connectSignaling(false);
 
 function handleOffer(offer) {
+  if (pc) {
+    teardownPeerConnection();
+    trackIndex = 0;
+    trackMap.clear();
+    if (elements.displaySelect) {
+      elements.displaySelect.innerHTML = '<option value="" selected>候选画面 ID...</option>';
+    }
+  }
   const peer = createPeerConnection();
   pc = peer;
   peer.setRemoteDescription(offer)
@@ -707,6 +858,8 @@ function createPeerConnection() {
   };
 
   const peer = new RTCPeerConnection(config);
+  const qos = new BrowserQosSession(peer);
+  peer.crossdeskQos = qos;
 
   peer.addEventListener("iceconnectionstatechange", () => {
     if (peer !== pc) return;
@@ -768,7 +921,11 @@ function createPeerConnection() {
     );
   };
 
-  peer.ontrack = ({ track, streams }) => {
+  peer.ontrack = ({ track, streams, receiver }) => {
+    if (peer !== pc) return;
+    if (track.kind === "video" && receiver && "jitterBufferTarget" in receiver) {
+      try { receiver.jitterBufferTarget = 20; } catch (err) {}
+    }
     // Handle audio tracks
     if (track.kind === "audio" && elements.audio) {
       if (!elements.audio.srcObject) {
@@ -848,20 +1005,51 @@ function createPeerConnection() {
   };
 
   peer.ondatachannel = (event) => {
+    if (peer !== pc) return;
     const channel = event.channel;
+    if (channel.label === "crossdesk-qos-v1") {
+      qos.attach(channel);
+      return;
+    }
+    if (channel.label === "crossdesk-input-v1") {
+      const attach = () => {
+        if (peer === pc) control.setMotionChannel?.(channel);
+      };
+      channel.addEventListener("open", attach);
+      channel.addEventListener("close", () => {
+        if (peer === pc && control.motionChannel === channel) control.setMotionChannel?.(null);
+      });
+      if (channel.readyState === "open") attach();
+      return;
+    }
+    if (channel.label !== "ping-pong" && channel.label !== "data-stream") return;
     control.setDataChannel(channel);
-    bindDataChannel(channel);
+    bindDataChannel(channel, peer);
   };
 
   return peer;
 }
 
-function bindDataChannel(channel) {
-  channel.addEventListener("open", () => {
+function bindDataChannel(channel, peer) {
+  let advertised = false;
+  const opened = () => {
+    if (peer !== pc || control.dataChannel !== channel) return;
     enableDataChannelUi(true);
-  });
+    // Only probe hosts that advertise support in the channel's DCEP metadata.
+    // Legacy hosts parse control messages as numeric action types and would
+    // log an error for an unsolicited web_qos_hello.
+    if (!advertised && channel.protocol === "crossdesk-control-v1") {
+      try {
+        channel.send(JSON.stringify({ type: "web_qos_hello", version: 1 }));
+        advertised = true;
+      } catch (err) {}
+    }
+  };
+  channel.addEventListener("open", opened);
+  if (channel.readyState === "open") opened();
 
   channel.addEventListener("close", () => {
+    if (peer !== pc || control.dataChannel !== channel) return;
     enableDataChannelUi(false);
     control.setDataChannel(null);
   });
@@ -1086,6 +1274,8 @@ function teardownPeerConnection() {
   if (!pc) return;
 
   setAudioToggleVisible(false);
+  pc.crossdeskQos?.close();
+  control.setDataChannel(null);
 
   try {
     pc.getSenders().forEach((sender) => sender.track?.stop?.());

@@ -243,6 +243,13 @@
   class ControlManager {
     constructor() {
       this.dataChannel = null;
+      this.motionChannel = null;
+      this.inputProtocol = false;
+      this.inputEpoch = 0;
+      this.inputSequence = 0;
+      this.pendingMotion = null;
+      this.motionTimer = null;
+      this.lastMotionAt = 0;
       this.elements = {
         video: document.getElementById("video"),
         mediaContainer: document.getElementById("media"),
@@ -369,8 +376,52 @@
         this.state.pointerLockFailed = false;
         this.state.lastPointerPos = null;
         this.state.desktopPointerCalibrated = false;
+        this.clearPendingMotion();
+        this.motionChannel = null;
+        this.inputProtocol = false;
+        this.inputEpoch = 0;
+        this.inputSequence = 0;
       }
       this.dataChannel = channel;
+    }
+
+    setMotionChannel(channel) {
+      this.clearPendingMotion();
+      this.motionChannel = channel;
+      // Keep epochs on the reliable channel if motion temporarily closes.
+      if (channel) this.inputProtocol = true;
+    }
+
+    clearPendingMotion() {
+      if (this.motionTimer !== null) clearTimeout(this.motionTimer);
+      this.motionTimer = null;
+      this.pendingMotion = null;
+    }
+
+    sendMotion(action) {
+      this.pendingMotion = action;
+      if (this.motionTimer !== null) return;
+      const flush = () => {
+        this.motionTimer = null;
+        const channel = this.motionChannel;
+        if (!this.pendingMotion || channel?.readyState !== "open") return;
+        if (channel.bufferedAmount > 512) {
+          this.motionTimer = setTimeout(flush, 16);
+          return;
+        }
+        const latest = this.pendingMotion;
+        this.pendingMotion = null;
+        try {
+          channel.send(JSON.stringify({ ...latest,
+            _input_epoch: this.inputEpoch, _input_seq: ++this.inputSequence }));
+          this.lastMotionAt = Date.now();
+        } catch (err) {
+          // The next position supersedes a failed datagram; never queue old moves.
+        }
+      };
+      const wait = Math.max(0, 16 - (Date.now() - this.lastMotionAt));
+      if (wait) this.motionTimer = setTimeout(flush, wait);
+      else flush();
     }
 
     isChannelOpen() {
@@ -380,6 +431,13 @@
     send(action) {
       if (!this.isChannelOpen()) return false;
       try {
+        // Button/key/display actions form barriers across the reliable and
+        // motion streams. Their coordinates supersede pending older motion.
+        if (this.inputProtocol) {
+          this.clearPendingMotion();
+          action = { ...action, _input_epoch: ++this.inputEpoch,
+            _input_seq: ++this.inputSequence };
+        }
         const payload = JSON.stringify(action);
         this.dataChannel.send(payload);
         return true;
@@ -410,7 +468,12 @@
         },
       };
 
-      this.send(action);
+      if (numericFlag === MouseFlag.move && this.motionChannel?.readyState === "open") {
+        this.sendMotion(action);
+      } else if (numericFlag !== MouseFlag.move ||
+                 !(this.dataChannel?.bufferedAmount > 16384)) {
+        this.send(action);
+      }
     }
 
     sendKeyboardAction(keyValue, isDown) {

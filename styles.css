@@ -822,6 +822,16 @@ video {
   white-space: nowrap;
 }
 
+#connection-quality {
+  margin: 8px 0 0;
+  color: #e5e7eb;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .connection-status-group .status-indicator {
   flex-shrink: 0;
 }
