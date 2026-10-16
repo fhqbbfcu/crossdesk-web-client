@@ -1,5 +1,5 @@
 // Update this and the asset cache keys with: node scripts/set-version.js <version>
-const WEB_CLIENT_VERSION = "2026.10.16.3";
+const WEB_CLIENT_VERSION = "2026.10.16.4";
 
 const elements = {
   clientVersion: document.getElementById("client-version"),
@@ -88,6 +88,85 @@ const CONNECT_BUTTON_DEFAULT_TEXT = elements.connectBtn
   : "连接";
 let trackIndex = 0; // Track index for display_id (0, 1, 2, ...)
 const trackMap = new Map(); // Map<index, track> - stores tracks by their display_id index
+
+class BrowserVideoSettings {
+  constructor(peer) {
+    this.peer = peer;
+    this.channel = null;
+    this.timer = null;
+    this.closed = false;
+    this.supported = false;
+    this.attempted = false;
+    // Use the same quality/FPS/preference request and acknowledgement as PC.
+    this.requested = Object.freeze({ quality: 2, frame_rate: 30, preference: 1, request_id: 1 });
+    this.state = { status: "waiting", requested: this.requested, applied: null };
+  }
+
+  bind(channel) {
+    this.channel = channel;
+    window.CrossDeskVideoSettings = this.state;
+    channel.binaryType = "arraybuffer";
+    channel.addEventListener("message", (event) => void this.receive(event.data, channel));
+    channel.addEventListener("open", () => this.request());
+    channel.addEventListener("close", () => {
+      if (this.channel === channel) this.close();
+    });
+  }
+
+  current(channel = this.channel) {
+    return !this.closed && this.peer === pc && channel === this.channel &&
+      control.dataChannel === channel;
+  }
+
+  request() {
+    if (!this.current() || !this.supported || this.attempted ||
+        this.channel.readyState !== "open") return;
+    this.attempted = true;
+    this.state.status = "pending";
+    // Go through control.send so input epoch barriers remain valid.
+    if (!control.send({ type: 11, video_settings: this.requested })) {
+      this.state.status = "failed";
+      return;
+    }
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      if (this.current() && this.state.status === "pending") this.state.status = "timeout";
+    }, 5000);
+  }
+
+  async receive(data, channel) {
+    if (!this.current(channel)) return;
+    try {
+      if (data instanceof ArrayBuffer) data = new TextDecoder().decode(data);
+      else if (typeof data !== "string" && typeof data?.text === "function") data = await data.text();
+      if (!this.current(channel) || typeof data !== "string" || data.length > 65536) return;
+      const message = JSON.parse(data);
+      if (message?.type === 3) {
+        this.supported = message.host_info?.supports_video_settings === true;
+        if (!this.attempted) this.state.status = this.supported ? "waiting" : "unsupported";
+        this.request();
+      } else if (message?.type === 12 && this.attempted &&
+          ["pending", "timeout"].includes(this.state.status)) {
+        const settings = message.video_settings;
+        if (!settings || typeof settings.accepted !== "boolean" ||
+            !Object.entries(this.requested).every(([key, value]) => settings[key] === value)) return;
+        if (this.timer !== null) clearTimeout(this.timer);
+        this.timer = null;
+        this.state.status = settings.accepted ? "applied" : "rejected";
+        this.state.applied = settings.accepted ? { ...settings } : null;
+      }
+    } catch (err) {
+      // Unrelated or malformed control data cannot change negotiated settings.
+    }
+  }
+
+  close() {
+    this.closed = true;
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    if (window.CrossDeskVideoSettings === this.state) window.CrossDeskVideoSettings = null;
+  }
+}
 
 class BrowserQosSession {
   constructor(peer) {
@@ -212,7 +291,7 @@ class BrowserQosSession {
       const diagnostics = { ...report, received_bps: Math.round(receivedBps),
         protocol: relayProtocol || local?.protocol,
         local_candidate_type: local?.candidateType, remote_candidate_type: remote?.candidateType,
-        sender: this.sender };
+        sender: this.sender, video_settings: this.peer.crossdeskVideoSettings?.state };
       window.CrossDeskStats = diagnostics;
       const label = document.getElementById("connection-quality");
       if (label) {
@@ -870,6 +949,7 @@ function createPeerConnection() {
   };
 
   const peer = new RTCPeerConnection(config);
+  peer.crossdeskVideoSettings = new BrowserVideoSettings(peer);
   const qos = new BrowserQosSession(peer);
   peer.crossdeskQos = qos;
 
@@ -1043,6 +1123,11 @@ function createPeerConnection() {
 }
 
 function bindDataChannel(channel, peer) {
+  if (peer.crossdeskVideoSettings.channel && peer.crossdeskVideoSettings.channel !== channel) {
+    peer.crossdeskVideoSettings.close();
+    peer.crossdeskVideoSettings = new BrowserVideoSettings(peer);
+  }
+  peer.crossdeskVideoSettings.bind(channel);
   let advertised = false;
   const opened = () => {
     if (peer !== pc || control.dataChannel !== channel) return;
@@ -1066,9 +1151,6 @@ function bindDataChannel(channel, peer) {
     control.setDataChannel(null);
   });
 
-  channel.addEventListener("message", (event) => {
-    // Message received (no logging in production)
-  });
 }
 
 async function sendAnswer(peer) {
@@ -1287,6 +1369,7 @@ function teardownPeerConnection() {
 
   setAudioToggleVisible(false);
   pc.crossdeskQos?.close();
+  pc.crossdeskVideoSettings?.close();
   control.setDataChannel(null);
 
   try {
