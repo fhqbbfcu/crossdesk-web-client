@@ -81,7 +81,7 @@
     <!-- PWA Manifest (可选，用于更好的Web App体验) -->
     <link rel="manifest" href="manifest.json" />
 
-    <link rel="stylesheet" href="styles.css?v=2026.10.16.6" />
+    <link rel="stylesheet" href="styles.css?v=2026.10.16.8" />
     <script
       src="vendor/adapter-9.0.1.min.js"
       onload="console.info('[CrossDesk] Loaded WebRTC adapter from local: vendor/adapter-9.0.1.min.js');"
@@ -230,11 +230,7 @@
               <button id="disconnect-connected" class="session-disconnect session-danger" type="button">断开连接</button>
             </section>
           </div>
-          <select id="mouse-control-mode" hidden aria-label="鼠标模式">
-            <option value="relative" selected>相对鼠标</option><option value="absolute">绝对鼠标</option>
-          </select>
-
-          <!-- Draggable virtual mouse: rectangular bar (left/middle/right) -->
+          <!-- Virtual mouse bar follows the session orb. -->
           <div id="virtual-mouse" style="display: none" aria-label="虚拟鼠标">
             <div class="virtual-mouse-row">
               <button id="virtual-left-btn" class="virtual-mouse-btn">
@@ -339,9 +335,9 @@
     </div>
 
 
-    <script src="control.js?v=2026.10.16.6"></script>
-    <script src="turn_credentials.js?v=2026.10.16.6"></script>
-    <script src="web_client.js?v=2026.10.16.6"></script>
-    <script src="session_controls.js?v=2026.10.16.6"></script>
+    <script src="control.js?v=2026.10.16.8"></script>
+    <script src="turn_credentials.js?v=2026.10.16.8"></script>
+    <script src="web_client.js?v=2026.10.16.8"></script>
+    <script src="session_controls.js?v=2026.10.16.8"></script>
   </body>
 </html>

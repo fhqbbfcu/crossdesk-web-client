@@ -264,7 +264,6 @@
         virtualRightBtn: document.getElementById("virtual-right-btn"),
         virtualScrollUp: document.getElementById("virtual-scroll-up"),
         virtualScrollDown: document.getElementById("virtual-scroll-down"),
-        mouseControlMode: document.getElementById("mouse-control-mode"),
         virtualKeyboard: document.getElementById("virtual-keyboard"),
         keyboardClose: document.getElementById("keyboard-close"),
       };
@@ -306,7 +305,6 @@
         initialTranslateY: 0,
         currentTranslateX: 0,
         currentTranslateY: 0,
-        virtualMouseMinimized: true,
       };
 
       this.lockedPanel = new LockedPanelController(this);
@@ -1096,7 +1094,6 @@
       this.state.lastPointerPos = null;
       this.state.pointerLockFailed = false;
       if (mode === "absolute" && this.state.pointerLocked) document.exitPointerLock?.();
-      if (this.elements.mouseControlMode) this.elements.mouseControlMode.value = mode;
     }
 
     setupVirtualMouse() {
@@ -1105,14 +1102,6 @@
       ).matches;
 
       this.state.isMobile = !isDesktop;
-
-      // 绑定模式切换事件
-      if (this.elements.mouseControlMode) {
-        this.elements.mouseControlMode.addEventListener("change", (event) => {
-          this.setMouseMode(event.target.value);
-        });
-        this.state.mobileControlMode = this.elements.mouseControlMode.value;
-      }
 
       this.elements.virtualLeftBtn?.addEventListener(
         "touchstart",
@@ -1134,106 +1123,16 @@
         passive: false,
       });
 
-      // Scroll up button with long-press support
-      if (this.elements.virtualScrollUp) {
-        const handleScrollUpDown = (e) => {
-          e.preventDefault();
-          this.handleVirtualScrollPress(
-            this.elements.virtualScrollUp,
-            "up",
-            true,
-          );
-        };
-        const handleScrollUpUp = (e) => {
-          e.preventDefault();
-          this.handleVirtualScrollPress(
-            this.elements.virtualScrollUp,
-            "up",
-            false,
-          );
-        };
-
-        this.elements.virtualScrollUp.addEventListener(
-          "mousedown",
-          handleScrollUpDown,
-          { passive: false },
-        );
-        this.elements.virtualScrollUp.addEventListener(
-          "mouseup",
-          handleScrollUpUp,
-          { passive: false },
-        );
-        this.elements.virtualScrollUp.addEventListener(
-          "mouseleave",
-          handleScrollUpUp,
-          { passive: false },
-        );
-        this.elements.virtualScrollUp.addEventListener(
-          "touchstart",
-          handleScrollUpDown,
-          { passive: false },
-        );
-        this.elements.virtualScrollUp.addEventListener(
-          "touchend",
-          handleScrollUpUp,
-          { passive: false },
-        );
-        this.elements.virtualScrollUp.addEventListener(
-          "touchcancel",
-          handleScrollUpUp,
-          { passive: false },
-        );
-      }
-
-      // Scroll down button with long-press support
-      if (this.elements.virtualScrollDown) {
-        const handleScrollDownDown = (e) => {
-          e.preventDefault();
-          this.handleVirtualScrollPress(
-            this.elements.virtualScrollDown,
-            "down",
-            true,
-          );
-        };
-        const handleScrollDownUp = (e) => {
-          e.preventDefault();
-          this.handleVirtualScrollPress(
-            this.elements.virtualScrollDown,
-            "down",
-            false,
-          );
-        };
-
-        this.elements.virtualScrollDown.addEventListener(
-          "mousedown",
-          handleScrollDownDown,
-          { passive: false },
-        );
-        this.elements.virtualScrollDown.addEventListener(
-          "mouseup",
-          handleScrollDownUp,
-          { passive: false },
-        );
-        this.elements.virtualScrollDown.addEventListener(
-          "mouseleave",
-          handleScrollDownUp,
-          { passive: false },
-        );
-        this.elements.virtualScrollDown.addEventListener(
-          "touchstart",
-          handleScrollDownDown,
-          { passive: false },
-        );
-        this.elements.virtualScrollDown.addEventListener(
-          "touchend",
-          handleScrollDownUp,
-          { passive: false },
-        );
-        this.elements.virtualScrollDown.addEventListener(
-          "touchcancel",
-          handleScrollDownUp,
-          { passive: false },
-        );
+      for (const [button, direction] of [[this.elements.virtualScrollUp, "up"],
+        [this.elements.virtualScrollDown, "down"]]) {
+        if (!button) continue;
+        for (const type of ["mousedown", "touchstart", "mouseup", "mouseleave", "touchend", "touchcancel"]) {
+          button.addEventListener(type, event => {
+            event.preventDefault();
+            this.handleVirtualScrollPress(button, direction,
+              type === "mousedown" || type === "touchstart");
+          }, { passive: false });
+        }
       }
 
       // The session orb positions the mouse bar; its own header drags the keyboard.
@@ -1324,7 +1223,7 @@
 
       if (isDown) {
         // Clear any existing timer for this key
-        this.stopVirtualKeyRepeat(keyElement);
+        this.stopRepeat(this.virtualKeyTimers, keyElement);
 
         // Send initial keydown
         this.sendKeyboardAction(keyCode, true);
@@ -1358,7 +1257,7 @@
       } else {
         if (!this.virtualKeyTimers.has(keyElement)) return;
         // Stop repeating
-        this.stopVirtualKeyRepeat(keyElement);
+        this.stopRepeat(this.virtualKeyTimers, keyElement);
 
         // Send keyup
         this.sendKeyboardAction(keyCode, false);
@@ -1393,17 +1292,12 @@
       if (this.state.touchGesture) this.state.touchGesture.cancelled = true;
     }
 
-    stopVirtualKeyRepeat(keyElement) {
-      const timerInfo = this.virtualKeyTimers.get(keyElement);
-      if (timerInfo) {
-        if (timerInfo.longPressTimer) {
-          clearTimeout(timerInfo.longPressTimer);
-        }
-        if (timerInfo.repeatTimer) {
-          clearInterval(timerInfo.repeatTimer);
-        }
-        this.virtualKeyTimers.delete(keyElement);
-      }
+    stopRepeat(timers, element) {
+      const timer = timers.get(element);
+      if (!timer) return;
+      clearTimeout(timer.longPressTimer);
+      clearInterval(timer.repeatTimer);
+      timers.delete(element);
     }
 
     emitVirtualWheel(direction = "up") {
@@ -1423,7 +1317,7 @@
 
       if (isDown) {
         // Clear any existing timer for this button
-        this.stopVirtualScrollRepeat(buttonElement);
+        this.stopRepeat(this.virtualScrollTimers, buttonElement);
 
         // Send initial scroll
         this.emitVirtualWheel(direction);
@@ -1452,7 +1346,7 @@
         this.virtualScrollTimers.set(buttonElement, timerInfo);
       } else {
         // Stop repeating
-        this.stopVirtualScrollRepeat(buttonElement);
+        this.stopRepeat(this.virtualScrollTimers, buttonElement);
 
         // Visual feedback - released state - clear inline styles to restore CSS
         setTimeout(() => {
@@ -1469,59 +1363,21 @@
       }
     }
 
-    stopVirtualScrollRepeat(buttonElement) {
-      const timerInfo = this.virtualScrollTimers.get(buttonElement);
-      if (timerInfo) {
-        if (timerInfo.longPressTimer) {
-          clearTimeout(timerInfo.longPressTimer);
-        }
-        if (timerInfo.repeatTimer) {
-          clearInterval(timerInfo.repeatTimer);
-        }
-        this.virtualScrollTimers.delete(buttonElement);
-      }
-    }
-
     onVirtualLeftStart(event) {
-      const touch = event.changedTouches?.[0] || event.touches?.[0];
-      if (!touch || !this.isChannelOpen() || this.state.gestureActive) return;
-      event.preventDefault();
-      this.ensureVideoRect();
-      this.state.gestureActive = true;
-      this.state.gestureButton = {
-        down: MouseFlag.left_down,
-        up: MouseFlag.left_up,
-      };
-      this.state.gestureStart = {
-        touchId: touch.identifier,
-        x: touch.clientX,
-        y: touch.clientY,
-        normalizedX: this.state.normalizedPos.x,
-        normalizedY: this.state.normalizedPos.y,
-      };
-      // 按下时设置为蓝色
-      if (this.elements.virtualLeftBtn) {
-        this.elements.virtualLeftBtn.style.backgroundColor =
-          "var(--primary-color)";
-        this.elements.virtualLeftBtn.style.color = "#fff";
-      }
-      this.sendMouseAction({
-        x: this.state.normalizedPos.x,
-        y: this.state.normalizedPos.y,
-        flag: MouseFlag.left_down,
-      });
+      this.onVirtualButtonStart(event, this.elements.virtualLeftBtn, MouseFlag.left_down, MouseFlag.left_up);
     }
 
     onVirtualRightStart(event) {
+      this.onVirtualButtonStart(event, this.elements.virtualRightBtn, MouseFlag.right_down, MouseFlag.right_up);
+    }
+
+    onVirtualButtonStart(event, button, down, up) {
       const touch = event.changedTouches?.[0] || event.touches?.[0];
       if (!touch || !this.isChannelOpen() || this.state.gestureActive) return;
       event.preventDefault();
       this.ensureVideoRect();
       this.state.gestureActive = true;
-      this.state.gestureButton = {
-        down: MouseFlag.right_down,
-        up: MouseFlag.right_up,
-      };
+      this.state.gestureButton = { down, up };
       this.state.gestureStart = {
         touchId: touch.identifier,
         x: touch.clientX,
@@ -1529,16 +1385,14 @@
         normalizedX: this.state.normalizedPos.x,
         normalizedY: this.state.normalizedPos.y,
       };
-      // 按下时设置为蓝色
-      if (this.elements.virtualRightBtn) {
-        this.elements.virtualRightBtn.style.backgroundColor =
-          "var(--primary-color)";
-        this.elements.virtualRightBtn.style.color = "#fff";
+      if (button) {
+        button.style.backgroundColor = "var(--primary-color)";
+        button.style.color = "#fff";
       }
       this.sendMouseAction({
         x: this.state.normalizedPos.x,
         y: this.state.normalizedPos.y,
-        flag: MouseFlag.right_down,
+        flag: down,
       });
     }
 

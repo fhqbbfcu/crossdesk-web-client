@@ -554,7 +554,7 @@ video {
   z-index: 100;
   pointer-events: none;
 }
-.connected-overlay [hidden], #mouse-control-mode[hidden] { display: none !important; }
+.connected-overlay [hidden] { display: none !important; }
 #session-menu-shield {
   position: fixed;
   inset: 0;
@@ -685,10 +685,6 @@ video {
   box-sizing: border-box;
   backdrop-filter: blur(3px);
   transition: background-color 0.2s, padding 0.3s ease;
-}
-
-.virtual-keyboard.dragging {
-  transition: none;
 }
 
 .keyboard-header {

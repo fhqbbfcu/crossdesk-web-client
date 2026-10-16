@@ -1,5 +1,5 @@
 // Update this and the asset cache keys with: node scripts/set-version.js <version>
-const WEB_CLIENT_VERSION = "2026.10.16.6";
+const WEB_CLIENT_VERSION = "2026.10.16.8";
 
 const elements = {
   clientVersion: document.getElementById("client-version"),
@@ -96,10 +96,8 @@ class BrowserVideoSettings {
     this.channel = null;
     this.timer = null;
     this.closed = false;
-    this.supported = false;
     this.attempted = false;
     this.requestId = 0;
-    this.appliedRequestId = null;
     this.requests = new Map();
     this.state = { status: "waiting", supported: false,
       selection: { ...DEFAULT_VIDEO_SETTINGS }, requested: null, applied: null };
@@ -129,7 +127,7 @@ class BrowserVideoSettings {
   }
 
   request(values = DEFAULT_VIDEO_SETTINGS) {
-    if (!this.current() || !this.supported || this.channel.readyState !== "open" || !values ||
+    if (!this.current() || !this.state.supported || this.channel.readyState !== "open" || !values ||
         !Number.isInteger(values.quality) || values.quality < 0 || values.quality > 2 ||
         ![30, 60].includes(values.frame_rate) || !Number.isInteger(values.preference) ||
         values.preference < 0 || values.preference > 2) return false;
@@ -178,9 +176,8 @@ class BrowserVideoSettings {
       if (!this.current(channel) || typeof data !== "string" || data.length > 65536) return;
       const message = JSON.parse(data);
       if (message?.type === 3) {
-        this.supported = message.host_info?.supports_video_settings === true;
-        this.state.supported = this.supported;
-        if (!this.supported) {
+        this.state.supported = message.host_info?.supports_video_settings === true;
+        if (!this.state.supported) {
           this.clearTimer();
           this.requests.clear();
           this.attempted = false;
@@ -189,17 +186,16 @@ class BrowserVideoSettings {
           this.requestDefault();
           this.notify();
         }
-      } else if (message?.type === 12 && this.supported) {
+      } else if (message?.type === 12 && this.state.supported) {
         const settings = message.video_settings;
         const requested = this.requests.get(settings?.request_id);
         if (!requested || typeof settings.accepted !== "boolean" ||
             !Object.entries(requested).every(([key, value]) => settings[key] === value)) return;
         this.requests.delete(settings.request_id);
         // Signed subtraction matches the native UInt32 sequence wrap rules.
-        if (settings.accepted && (this.appliedRequestId === null ||
-            ((settings.request_id - this.appliedRequestId) | 0) >= 0)) {
+        if (settings.accepted && (!this.state.applied ||
+            ((settings.request_id - this.state.applied.request_id) | 0) >= 0)) {
           this.state.applied = { ...settings };
-          this.appliedRequestId = settings.request_id;
         }
         if (settings.request_id === this.requestId) {
           this.clearTimer();
@@ -232,7 +228,6 @@ class BrowserQosSession {
     this.closed = false;
     this.busy = false;
     this.previous = new Map();
-    this.lastDecoded = new Map();
     this.sequence = 0;
     this.sender = null;
   }
@@ -240,7 +235,6 @@ class BrowserQosSession {
   start() {
     if (this.closed || this.timer !== null || typeof this.peer.getStats !== "function") return;
     this.previous.clear();
-    this.lastDecoded.clear();
     this.timer = setInterval(() => void this.sample(), 500);
     void this.sample();
   }
@@ -251,7 +245,10 @@ class BrowserQosSession {
     const start = () => this.start();
     channel.addEventListener("open", start);
     channel.addEventListener("close", () => {
-      if (this.channel === channel) this.channel = null;
+      if (this.channel === channel) {
+        this.channel = null;
+        this.sender = null;
+      }
     });
     channel.addEventListener("message", ({ data }) => {
       if (this.closed || this.channel !== channel) return;
@@ -281,20 +278,19 @@ class BrowserQosSession {
           pair = stats.get(report.selectedCandidatePairId) || pair;
         if (report.type !== "inbound-rtp" ||
             (report.kind || report.mediaType) !== "video") return;
-        next.set(report.id, report);
-        const prev = this.previous.get(report.id);
-        if (!prev) {
-          this.lastDecoded.set(report.id, report.timestamp);
-          return;
-        }
+        const previous = this.previous.get(report.id);
+        const current = { report, lastDecoded: previous?.lastDecoded ?? report.timestamp };
+        next.set(report.id, current);
+        if (!previous) return;
+        const prev = previous.report;
         const elapsed = (report.timestamp - prev.timestamp) / 1000;
-        if (!(elapsed > 0 && elapsed <= 5)) return;
         const delta = (key) => Number.isFinite(report[key]) && Number.isFinite(prev[key]) &&
           report[key] >= prev[key] ? report[key] - prev[key] : 0;
         // Counters reset on a new SSRC/decoder; never mix across epochs.
-        if (report.packetsReceived < prev.packetsReceived ||
+        if (!(elapsed > 0 && elapsed <= 5) ||
+            report.packetsReceived < prev.packetsReceived ||
             report.framesDecoded < prev.framesDecoded) {
-          this.lastDecoded.set(report.id, report.timestamp);
+          current.lastDecoded = report.timestamp;
           return;
         }
         sampled = true;
@@ -309,21 +305,18 @@ class BrowserQosSession {
         width = report.frameWidth || width;
         height = report.frameHeight || height;
         const frames = delta("framesDecoded");
-        if (frames) this.lastDecoded.set(report.id, report.timestamp);
+        if (frames) current.lastDecoded = report.timestamp;
         // freezeCount can increment after playback has already recovered.
         // Only report an ongoing stall while new media is actually arriving;
         // idle sources and paused/background reception are not decoder load.
         if (received > 0 &&
-            report.timestamp - this.lastDecoded.get(report.id) >= 1500) frozen = true;
+            report.timestamp - current.lastDecoded >= 1500) frozen = true;
         const emitted = delta("jitterBufferEmittedCount");
         if (emitted) jitterMs = Math.max(jitterMs, delta("jitterBufferDelay") * 1000 / emitted);
         if (frames) decodeMs = Math.max(decodeMs, delta("totalDecodeTime") * 1000 / frames);
         fps = Math.max(fps, frames / elapsed);
       });
       this.previous = next;
-      for (const id of this.lastDecoded.keys()) {
-        if (!next.has(id)) this.lastDecoded.delete(id);
-      }
       if (!pair) stats.forEach((report) => {
         if (report.type === "candidate-pair" && report.state === "succeeded" &&
             (report.nominated || report.selected)) pair = report;
@@ -340,12 +333,14 @@ class BrowserQosSession {
       const relayProtocol = local?.candidateType === "relay" ? local.relayProtocol : undefined;
       const report = { type: "web_qos", version: 1, sequence: ++this.sequence,
         packets, lost, rtt_ms: rttMs, jitter_ms: jitterMs,
+        received_bps: Math.round(receivedBps),
         decode_ms: decodeMs, fps, frozen, width, height,
         route, relay_protocol: relayProtocol || "unknown" };
       // Local network diagnostics also work with hosts without the QoS extension.
-      if (channel?.readyState === "open" && channel.bufferedAmount <= 4096)
-        channel.send(JSON.stringify(report));
-      const diagnostics = { ...report, received_bps: Math.round(receivedBps),
+      if (channel?.readyState === "open" && channel.bufferedAmount <= 4096) {
+        try { channel.send(JSON.stringify(report)); } catch (err) {}
+      }
+      const diagnostics = { ...report,
         protocol: relayProtocol || local?.protocol,
         local_candidate_type: local?.candidateType, remote_candidate_type: remote?.candidateType,
         sender: this.sender, video_settings: this.peer.crossdeskVideoSettings?.state };
@@ -374,7 +369,6 @@ class BrowserQosSession {
     this.timer = null;
     this.channel = null;
     this.previous.clear();
-    this.lastDecoded.clear();
     window.CrossDeskStats = null;
     window.CrossDeskSessionControls?.renderNetwork(null);
     const label = document.getElementById("connection-quality");
@@ -1562,6 +1556,7 @@ if (elements.displaySelect) {
 
 // Session controls own the mobile-style floating orb and menu.
 window.CrossDeskSession = {
+  defaultVideoSettings: DEFAULT_VIDEO_SETTINGS,
   requestVideoSettings(values) { return pc?.crossdeskVideoSettings?.request(values) || false; },
   disconnect,
 };

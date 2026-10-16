@@ -99,7 +99,6 @@
       control.setMouseMode("relative");
       control.hideVirtualKeyboard();
       this.close();
-      this.layout();
     }
 
     stop() {
@@ -146,7 +145,6 @@
       this.updateMouse();
       this.renderSettings(window.CrossDeskVideoSettings);
       this.renderNetwork(window.CrossDeskStats);
-      this.layout();
       (page === "disconnect" ? byId("session-disconnect-cancel") : byId("session-menu-close")).focus({ preventScroll: true });
     }
 
@@ -163,7 +161,6 @@
     updateMouse() {
       const visible = this.active && this.connected && this.videoReady && this.mouseVisible && panel.hidden;
       byId("virtual-mouse").style.display = visible ? "flex" : "none";
-      control.state.virtualMouseMinimized = !visible;
       byId("session-mouse-label").textContent = this.mouseVisible ? "收起鼠标" : "虚拟鼠标";
       byId("session-mouse").setAttribute("aria-pressed", String(this.mouseVisible));
       byId("session-mouse-mode-label").textContent = control.state.mobileControlMode === "relative" ? "相对鼠标" : "绝对鼠标";
@@ -171,7 +168,7 @@
     }
 
     renderSettings(state) {
-      const selection = state?.selection || { quality: 2, frame_rate: 30, preference: 1 };
+      const selection = state?.selection || session.defaultVideoSettings;
       panel.querySelectorAll("[data-setting]").forEach(button => {
         button.disabled = !state?.supported;
         button.setAttribute("aria-pressed", String(selection[button.dataset.setting] === Number(button.dataset.value)));
@@ -186,6 +183,7 @@
     }
 
     renderNetwork(stats) {
+      if (panel.hidden || this.page !== "network") return;
       const finite = (value, suffix) => Number.isFinite(value) ? `${Math.round(value)}${suffix}` : "—";
       const values = {
         resolution: stats?.width && stats.height ? `${stats.width} × ${stats.height}` : "—",
@@ -198,7 +196,7 @@
           : stats?.route === "direct" ? "直连" : "—",
       };
       for (const [key, value] of Object.entries(values)) byId(`network-${key}`).textContent = value;
-      if (!panel.hidden) this.layout();
+      this.layout();
     }
 
     beginDrag(event, target) {
@@ -290,7 +288,6 @@
         control.cancelLocalInput(); this.mouseVisible = !this.mouseVisible; this.close();
       });
       byId("session-mouse-mode").addEventListener("click", () => {
-        control.cancelLocalInput();
         const mode = control.state.mobileControlMode === "relative" ? "absolute" : "relative";
         control.setMouseMode(mode);
         this.updateMouse();
