@@ -543,762 +543,128 @@ video {
   }
 }
 
-/* Connected overlay (shown when connected) */
+/* Shared mobile floating controls. Only menu content scrolls on short screens. */
 .connected-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  position: fixed;
+  inset: 0;
   z-index: 100;
   pointer-events: none;
 }
-
-.connected-panel {
-  width: 296px;
-  max-width: 100vw;
-  background: rgba(17, 24, 39, 0.88);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  padding: 10px 12px;
-  pointer-events: auto;
+.connected-overlay [hidden], #mouse-control-mode[hidden] { display: none !important; }
+#session-menu-shield {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  transition: transform 0.3s ease, opacity 0.3s ease;
-  transform: translateY(0);
-  opacity: 1;
-  cursor: default;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
-  border-radius: 18px;
-  /* Note: position: fixed is needed for panel positioning, icon uses absolute positioning relative to this */
-}
-
-.connected-panel.minimized {
-  transform: translateY(0);
-  opacity: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
   padding: 0;
   background: transparent;
-  backdrop-filter: none;
-  border: none;
-  width: auto;
-  min-width: 48px;
-  max-width: 48px;
-  height: 48px;
-  min-height: 48px;
-  max-height: 48px;
-  right: auto;
-  bottom: auto;
-}
-
-.connected-panel.minimized .panel-content {
-  display: none;
-}
-
-.panel-content {
-  display: block;
-  padding-left: 28px;
-}
-
-.panel-collapsed-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #ffffff;
-  backdrop-filter: blur(10px);
-  padding: 8px;
-  border-radius: 50%;
-  border: none;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  -webkit-touch-callout: none;
-  width: 48px;
-  height: 48px;
-  min-width: 48px;
-  max-width: 48px;
-  min-height: 48px;
-  max-height: 48px;
-  position: absolute;
-  top: -1px;
-  left: -1px;
-  z-index: 300;
   pointer-events: auto;
-}
-
-.panel-collapsed-bar:hover,
-.panel-collapsed-bar.pointer-lock-hover {
-  background: #f8fafc;
-}
-
-.panel-collapsed-bar:active {
-  cursor: grabbing;
-}
-
-.connected-panel.minimized .panel-collapsed-bar {
-  top: 0;
-  left: 0;
-}
-
-.collapsed-bar-text {
-  color: #000;
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.collapsed-bar-icon {
-  width: 30px;
-  height: 30px;
-  object-fit: contain;
-  display: block;
-  user-select: none;
-  -webkit-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  -webkit-touch-callout: none;
-  -webkit-user-drag: none;
-  -khtml-user-drag: none;
-  -moz-user-drag: none;
-  -o-user-drag: none;
-  user-drag: none;
-  pointer-events: none;
-}
-  
-.connected-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.connected-controls-row {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  flex: 1;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-/* Ensure all controls have consistent height and alignment */
-.connected-controls-row > * {
-  height: 40px;
-  display: flex;
-  align-items: center;
-}
-
-.connected-header .option.compact {
-  margin-bottom: 0;
-  flex-shrink: 0;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.connected-header .option.compact label {
-  margin-bottom: 0;
-  height: auto;
-  line-height: 40px;
-  min-width: 44px;
-  text-align: right;
-  color: #cbd5e1;
-  font-size: 13px;
-}
-
-.connected-header .option.compact select {
-  height: 40px;
-  box-sizing: border-box;
-  width: clamp(132px, 16vw, 180px);
-  min-width: 132px;
-  max-width: 180px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
-  padding: 0 12px;
-  background: rgba(255, 255, 255, 0.96);
-  color: #1f2937;
-  margin: 0;
-  flex-shrink: 0;
-}
-
-.connected-header .option.compact select:disabled {
-  background: rgba(255, 255, 255, 0.88);
-  color: #64748b;
-  opacity: 1;
-}
-
-/* Left side: options (画面 and 鼠标模式) */
-.connected-controls-row .option.compact {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  width: 100%;
-}
-
-/* Right side: status and buttons */
-.controls-right-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  margin-left: 0;
-  height: 40px;
-  width: 100%;
-  justify-content: flex-end;
-  position: relative;
-}
-
-.connected-controls-row .connection-status-group {
-  flex-shrink: 0;
-  margin: 0;
-  position: relative;
-}
-
-.connected-controls-row .disconnect-btn {
-  flex-shrink: 0;
-  margin: 0;
-}
-
-.connected-controls-row .audio-toggle-btn {
-  flex-shrink: 0;
-  margin: 0;
-}
-
-.connected-controls-row .minimize-btn {
-  flex-shrink: 0;
-  margin: 0;
-}
-
-.control-buttons {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.control-btn {
-  padding: 6px 12px;
-  background-color: var(--primary-color);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  height: 36px;
-  transition: background-color 0.2s;
-  }
-  
-.control-btn:hover {
-  background-color: var(--hover-color);
-}
-
-/* Connection status group (now inside panel) */
-.connection-status-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  padding: 0 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  height: 40px;
-  box-sizing: border-box;
-  min-width: auto;
-  justify-content: center;
-  position: relative;
-}
-
-.connection-status-label {
-  color: #e5e7eb;
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-#connection-quality {
-  margin: 8px 0 0;
-  color: #e5e7eb;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.4;
-  text-align: right;
-  white-space: normal;
-}
-
-.connection-status-group .status-indicator {
-  flex-shrink: 0;
-}
-
-.connected-panel .status-led {
-  width: 10px;
-  height: 10px;
-}
-
-.connected-panel .status-led-on {
-  background-color: #34d399;
-  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.16);
-}
-
-.connected-panel .status-led-off {
-  background-color: #fb7185;
-  box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.16);
-}
-
-/* Disconnect button (now inside panel) */
-.disconnect-btn {
-  padding: 0 14px;
-  background-color: #ef4444;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  height: 40px;
-  min-width: auto;
-  transition: background-color 0.2s;
-  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
-  white-space: nowrap;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
-  margin-right: 0; /* Ensure no right margin for alignment */
-  position: relative; /* Ensure box-shadow doesn't affect alignment */
-  }
-  
-.disconnect-btn:hover {
-  background-color: #dc2626;
-}
-
-.disconnect-btn:active {
-  transform: translateY(0);
-}
-
-.audio-toggle-btn {
-  padding: 0;
-  background: rgba(255, 255, 255, 0.08);
-  color: #e5e7eb;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  height: 40px;
-  width: 40px;
-  min-width: 40px;
-  box-sizing: border-box;
-  align-items: center;
-  justify-content: center;
-  box-shadow: none;
-  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
-}
-
-.audio-toggle-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.2);
-  color: #ffffff;
-}
-
-.audio-toggle-btn[aria-pressed="true"] {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.1);
-  color: #94a3b8;
-}
-
-.audio-toggle-btn[aria-pressed="true"]:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.16);
-  color: #cbd5e1;
-}
-
-.audio-toggle-icon {
-  display: block;
-  width: 20px;
-  height: 20px;
-}
-
-.audio-icon-speaker {
-  fill: currentColor;
-  stroke: none;
-}
-
-.audio-icon-volume,
-.audio-icon-mute {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.audio-icon-volume {
-  display: none;
-}
-
-.audio-toggle-btn.audio-is-playing .audio-icon-volume {
-  display: block;
-}
-
-.audio-toggle-btn.audio-is-playing .audio-icon-mute {
-  display: none;
-}
-
-@media (max-width: 600px) {
-  .connected-panel {
-    width: min(236px, calc(100vw - 12px));
-    padding: 6px 8px;
-    border-radius: 12px;
-  }
-
-  .panel-content {
-    padding-left: 26px;
-  }
-
-  .connected-panel .panel-collapsed-bar {
-    width: 36px;
-    height: 36px;
-    min-width: 36px;
-    max-width: 36px;
-    min-height: 36px;
-    max-height: 36px;
-    padding: 5px;
-  }
-
-  .connected-panel .collapsed-bar-icon {
-    width: 24px;
-    height: 24px;
-  }
-
-  .connected-panel.minimized {
-    width: 36px;
-    min-width: 36px;
-    max-width: 36px;
-    height: 36px;
-    min-height: 36px;
-    max-height: 36px;
-  }
-
-  .connected-controls-row {
-    gap: 4px;
-  }
-
-  .connected-controls-row > *,
-  .connected-header .option.compact,
-  .controls-right-group,
-  .connection-status-group,
-  .disconnect-btn,
-  .audio-toggle-btn {
-    height: 34px;
-  }
-
-  .connected-header .option.compact {
-    flex-wrap: nowrap;
-    gap: 4px;
-  }
-
-  .connected-header .option.compact label {
-    width: 52px;
-    min-width: 52px;
-    line-height: 34px;
-    font-size: 12px;
-  }
-
-  .connected-header .option.compact select {
-    width: 132px;
-    min-width: 0;
-    max-width: 132px;
-    flex: 0 1 132px;
-    height: 34px;
-    padding: 0 7px;
-    font-size: 12px;
-  }
-
-  .controls-right-group {
-    gap: 4px;
-  }
-
-  .connection-status-group {
-    gap: 4px;
-    padding: 0 6px;
-  }
-
-  .connection-status-label,
-  .disconnect-btn {
-    font-size: 12px;
-  }
-
-  .disconnect-btn {
-    padding: 0 8px;
-  }
-
-  .audio-toggle-btn {
-    width: 34px;
-    min-width: 34px;
-  }
-
-  .audio-toggle-icon {
-    width: 18px;
-    height: 18px;
-  }
-}
-
-/* Minimize button */
-.minimize-btn {
-  padding: 0;
-  background-color: rgba(0, 0, 0, 0.1);
-  color: #333;
-  border: 1px solid rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 16px;
-  font-weight: bold;
-  height: 36px;
-  width: 28px;
-  min-width: 28px;
-  line-height: 1;
-  transition: background-color 0.2s;
-  flex-shrink: 0;
-  margin: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  }
-
-.minimize-btn:hover {
-  background-color: rgba(0, 0, 0, 0.15);
-  border-color: rgba(0, 0, 0, 0.3);
-}
-
-.minimize-btn:active {
-  transform: translateY(0);
-}
-
-/* Virtual mouse related styles */
-#virtual-mouse {
-  position: absolute;
-  bottom: 80px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 10;
-  background-color: rgba(255, 255, 255, 0.18);
-  border-radius: max(8px, 1vw);
-  padding: max(6px, 0.8vh) max(6px, 0.8vw);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
-  width: auto;
-  min-width: min(320px, 90vw);
-  max-width: min(400px, 90vw);
   touch-action: none;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  box-sizing: border-box;
-  backdrop-filter: blur(3px);
-  transition: background-color 0.2s, padding 0.3s ease;
-  display: flex;
-  flex-direction: column;
+  transform: none;
+  cursor: default;
 }
-
-#virtual-mouse.dragging {
-  transition: none;
-}
-
-#virtual-mouse.minimized {
-  background-color: rgba(255, 255, 255, 0.18);
-  padding: max(6px, 0.8vh) max(4px, 0.6vw);
-}
-
-.virtual-mouse-header {
-  display: flex;
-  justify-content: flex-start;
-  align-items: center;
-  margin-bottom: max(4px, 0.6vh);
-  padding-left: 0;
-  padding-right: 0;
-  cursor: move;
-  user-select: none;
-  touch-action: none;
-  gap: max(4px, 0.6vw);
-}
-
-.virtual-mouse-minimize-btn {
-  padding: 0;
-  background-color: rgba(255, 255, 255, 0.48);
-  color: #222;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: max(4px, 0.6vw);
-  font-size: 20px;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
-  user-select: none;
-  touch-action: manipulation;
-  transition: all 0.1s;
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
-  min-height: 32px;
-  box-sizing: border-box;
-  outline: none !important;
-  -webkit-tap-highlight-color: transparent;
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-.virtual-mouse-minimize-btn:active {
-  background-color: rgba(200, 200, 200, 0.65) !important;
-  transform: scale(0.92);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
-}
-
-.virtual-mouse-minimize-btn:focus {
-  outline: none !important;
-  background-color: rgba(255, 255, 255, 0.48) !important;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
-}
-
-.virtual-mouse-restore-btn {
-  padding: 0;
-  background-color: rgba(255, 255, 255, 0.6);
-  color: #222;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 18px;
-  font-weight: 500;
-  height: 36px;
-  width: 36px;
-  min-width: 36px;
-  transition: background-color 0.2s;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  white-space: nowrap;
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
-  position: absolute;
-  top: 0;
-  flex-shrink: 0;
-  z-index: 1;
-}
-
-.virtual-mouse-restore-btn:hover {
-  background-color: rgba(255, 255, 255, 0.8);
-}
-
-.virtual-mouse-restore-btn:active {
-  background-color: rgba(200, 200, 200, 0.8);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
-}
-
-#virtual-mouse.minimized-to-statusbar {
-  display: none !important;
-}
-
-.virtual-mouse-row {
-  display: flex;
-  gap: max(4px, 0.6vw);
-  justify-content: center;
-  align-items: stretch;
-  flex-wrap: nowrap;
-  width: 100%;
-}
-
-.virtual-mouse-btn {
-  flex: 1 1 0;
+.panel-collapsed-bar {
+  position: fixed;
+  width: 54px;
+  height: 54px;
   min-width: 54px;
-  max-width: none;
-  height: 54px;
-  background-color: rgba(255, 255, 255, 0.48) !important;
-  color: #222;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: max(4px, 0.6vw);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
-  user-select: none;
-  touch-action: manipulation;
-  transition: all 0.1s;
-  padding: 0 8px;
-  box-sizing: border-box;
-  outline: none !important;
-  -webkit-tap-highlight-color: transparent;
+  padding: 4px;
+  border: 0;
+  border-radius: 50%;
+  background: #f5f5f7;
+  box-shadow: 0 3px 12px #0003;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+  z-index: 2;
 }
-
-.virtual-mouse-btn:active {
-  background-color: rgba(200, 200, 200, 0.65) !important;
-  transform: scale(0.92);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+.panel-collapsed-bar:hover:not(:disabled), .panel-collapsed-bar.pointer-lock-hover {
+  background: #fff;
+  transform: none;
 }
-
-.virtual-mouse-btn:focus {
-  outline: none !important;
-  background-color: rgba(255, 255, 255, 0.48) !important;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
-}
-
-.virtual-scroll-buttons {
+.panel-collapsed-bar:active { cursor: grabbing; }
+.collapsed-bar-icon { width: 46px; height: 46px; pointer-events: none; -webkit-user-drag: none; }
+.connected-panel {
+  position: fixed;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  width: 30px;
-  height: 54px;
-  flex-shrink: 0;
-  flex-grow: 0;
-}
-
-.virtual-scroll-btn {
-  flex: 1;
-  width: 30px;
-  min-width: 30px;
-  max-width: 30px;
-  height: 25px;
-  background-color: rgba(255, 255, 255, 0.48) !important;
-  color: #222;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: max(4px, 0.6vw);
-  font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
-  user-select: none;
-  touch-action: manipulation;
-  transition: all 0.1s;
-  padding: 0;
+  gap: 10px;
   box-sizing: border-box;
-  outline: none !important;
-  -webkit-tap-highlight-color: transparent;
+  padding: 12px;
+  border-radius: 18px;
+  color: #202124;
+  background: #fafafc;
+  box-shadow: 0 8px 30px #0004;
+  pointer-events: auto;
+  overflow: hidden;
+  z-index: 1;
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
 }
+.connected-panel button { min-width: 0; color: #24262b; background: #eeeef2; border-radius: 9px; padding: 8px; font-size: 12px; }
+.connected-panel button:hover:not(:disabled), .connected-panel button.pointer-lock-hover { background: #e0e6ee; transform: none; }
+.connected-panel button:disabled { opacity: .45; cursor: not-allowed; }
+.session-menu-header { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.session-menu-heading { flex: 1; min-width: 0; }
+.session-menu-heading strong { font-size: 14px; }
+.connected-panel .session-icon-button { width: 30px; height: 30px; padding: 0; font-size: 24px; background: transparent; flex-shrink: 0; }
+.connected-panel .status-led { width: 8px; height: 8px; flex-shrink: 0; margin: 0 3px; }
+#connection-quality { margin: 3px 0 0; font-size: 10px; line-height: 1.4; color: #737780; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.session-menu-body { overflow-y: auto; min-height: 0; overscroll-behavior: contain; touch-action: pan-y; }
+.session-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.session-landscape .session-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.connected-panel .session-tile { min-height: 64px; display: flex; flex-direction: column; gap: 6px; font-size: 11px; padding: 8px 2px; }
+.session-tile svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.audio-icon-volume { display: none; }
+.audio-is-playing .audio-icon-volume { display: block; }
+.audio-is-playing .audio-icon-mute { display: none; }
+.connected-panel .session-disconnect { width: 100%; min-height: 34px; flex: 0 0 auto; }
+.connected-panel .session-danger { color: #fff; background: #e64e4e; }
+.connected-panel .session-danger:hover, .connected-panel .session-danger.pointer-lock-hover { background: #ce3d3d; }
+.connected-panel fieldset { border: 0; padding: 0; margin: 0 0 12px; min-width: 0; }
+.connected-panel legend, .session-field-label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 600; }
+.session-segments { display: flex; gap: 4px; }
+.session-segments button { flex: 1; }
+.session-segments button[aria-pressed="true"] { color: #1262b3; background: #e0edfc; }
+.session-detail { color: #737780; font-size: 11px; margin: 8px 0; }
+.session-feedback { margin: 8px 0 0; color: #8b5959; font-size: 12px; }
+.session-feedback:empty { display: none; }
+#video-settings-retry { margin-top: 8px; }
+#display-id { width: 100%; box-sizing: border-box; background: #eeeef2; color: #24262b; border: 0; padding: 10px; border-radius: 8px; }
+.session-network { margin: 0; font-size: 12px; }
+.session-network > div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #ececf0; }
+.session-network dt { color: #737780; }
+.session-network dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.connected-panel .client-version { color: #91949c; font-size: 10px; margin: 10px 0 0; text-align: center; }
+.session-confirm-actions { display: flex; gap: 8px; margin-top: 14px; }
+.session-confirm-actions button { flex: 1; }
 
-.virtual-scroll-btn:active {
-  background-color: rgba(200, 200, 200, 0.65) !important;
-  transform: scale(0.92);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+/* The mouse bar follows the orb and yields its space while the menu is open. */
+#virtual-mouse {
+  position: fixed;
+  z-index: 90;
+  width: 140px;
+  height: 48px;
+  box-sizing: border-box;
+  padding: 4px;
+  border-radius: 12px;
+  background: #f5f5f7;
+  box-shadow: 0 3px 12px #0003;
+  touch-action: none;
 }
-
-.virtual-scroll-btn:focus {
-  outline: none !important;
-  background-color: rgba(255, 255, 255, 0.48) !important;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
-}
+.virtual-mouse-row { display: flex; align-items: stretch; gap: 4px; width: 100%; }
+.virtual-mouse-btn, .virtual-scroll-btn { min-width: 0; padding: 0; color: #333; background: #e8e8ee; border-radius: 8px; font-size: 11px; }
+.virtual-mouse-btn { flex: 1; }
+.virtual-scroll-buttons { width: 28px; display: flex; flex-direction: column; gap: 2px; }
+.virtual-scroll-btn { width: 28px; flex: 1; font-size: 13px; line-height: 1; }
+.virtual-mouse-btn:hover:not(:disabled), .virtual-scroll-btn:hover:not(:disabled) { background: #d8dfeb; transform: none; }
 
 /* Virtual keyboard styles */
 .virtual-keyboard {
@@ -1520,47 +886,6 @@ video {
 }
 
 
-.drag-handle {
-  position: absolute;
-  top: -10px;
-  right: -10px;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background-color: #4CAF50;
-  cursor: move;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: bold;
-  font-size: 18px;
-  transition: background-color 0.2s;
-}
-
-.drag-handle:hover {
-  background-color: #45a049;
-}
-
-.drag-handle::after {
-  content: "≡";
-}
-
-#virtual-mouse.minimized .drag-handle {
-  position: static;
-  width: 40px;
-  height: 40px;
-}
-
-/* Hide virtual mouse on desktop */
-@media (hover: hover) and (pointer: fine) {
-  #virtual-mouse {
-    display: none;
-  }
-}
-
-
 /* Focus styles for accessibility */
 button:focus-visible,
 input:focus,
@@ -1620,15 +945,6 @@ select:focus {
     }
   }
 
-  .connected-header {
-    flex-direction: column;
-    align-items: stretch;
-}
-
-  .connected-header .option.compact {
-    min-width: 100%;
-  }
-
   .control-buttons {
     width: 100%;
 }
@@ -1637,3 +953,22 @@ select:focus {
     flex: 1;
 }
 }
+
+/* Keep the keyboard header reachable, including in landscape and after rotation. */
+.virtual-keyboard {
+  position: fixed;
+  z-index: 95;
+  min-width: 0;
+  max-width: none;
+  overflow: hidden;
+  padding: 8px;
+  border-radius: 14px;
+  background: #f5f5f7;
+  box-shadow: 0 4px 20px #0003;
+  transition: none;
+}
+.keyboard-header { height: 28px; margin-bottom: 8px; color: #555; font-size: 12px; touch-action: none; }
+.keyboard-grip { flex: 1; text-align: center; font-size: 20px; color: #999; }
+.keyboard-close-btn { min-width: 28px; width: 28px; height: 28px; padding: 0; font-size: 20px; }
+.keyboard-layout { max-height: calc(var(--keyboard-height, 100dvh) - 60px); overflow: auto; overscroll-behavior: contain; touch-action: pan-y; }
+.keyboard-row { flex-shrink: 0; }

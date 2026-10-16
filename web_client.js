@@ -1,5 +1,5 @@
 // Update this and the asset cache keys with: node scripts/set-version.js <version>
-const WEB_CLIENT_VERSION = "2026.10.16.4";
+const WEB_CLIENT_VERSION = "2026.10.16.6";
 
 const elements = {
   clientVersion: document.getElementById("client-version"),
@@ -19,8 +19,6 @@ const elements = {
   audioToggleBtn: document.getElementById("audio-toggle"),
   connectionOverlay: document.getElementById("connection-overlay"),
   connectedOverlay: document.getElementById("connected-overlay"),
-  connectedPanel: document.getElementById("connected-panel"),
-  panelCollapsedBar: document.getElementById("panel-collapsed-bar"),
   connectingOverlay: document.getElementById("connecting-overlay"),
   connectingMessageText: document.getElementById("connecting-message-text"),
   connectionStatusLed: document.getElementById("connection-status-led"),
@@ -89,6 +87,9 @@ const CONNECT_BUTTON_DEFAULT_TEXT = elements.connectBtn
 let trackIndex = 0; // Track index for display_id (0, 1, 2, ...)
 const trackMap = new Map(); // Map<index, track> - stores tracks by their display_id index
 
+// The desktop/mobile wire format: quality 0/1/2, preference 0/1/2.
+// Match mobile choices, with quality priority and 30 fps as Web defaults.
+const DEFAULT_VIDEO_SETTINGS = Object.freeze({ quality: 2, frame_rate: 30, preference: 1 });
 class BrowserVideoSettings {
   constructor(peer) {
     this.peer = peer;
@@ -97,17 +98,22 @@ class BrowserVideoSettings {
     this.closed = false;
     this.supported = false;
     this.attempted = false;
-    // Use the same quality/FPS/preference request and acknowledgement as PC.
-    this.requested = Object.freeze({ quality: 2, frame_rate: 30, preference: 1, request_id: 1 });
-    this.state = { status: "waiting", requested: this.requested, applied: null };
+    this.requestId = 0;
+    this.appliedRequestId = null;
+    this.requests = new Map();
+    this.state = { status: "waiting", supported: false,
+      selection: { ...DEFAULT_VIDEO_SETTINGS }, requested: null, applied: null };
   }
+
+  notify() { window.CrossDeskSessionControls?.renderSettings(this.state); }
 
   bind(channel) {
     this.channel = channel;
     window.CrossDeskVideoSettings = this.state;
+    this.notify();
     channel.binaryType = "arraybuffer";
     channel.addEventListener("message", (event) => void this.receive(event.data, channel));
-    channel.addEventListener("open", () => this.request());
+    channel.addEventListener("open", () => this.requestDefault());
     channel.addEventListener("close", () => {
       if (this.channel === channel) this.close();
     });
@@ -118,20 +124,50 @@ class BrowserVideoSettings {
       control.dataChannel === channel;
   }
 
-  request() {
-    if (!this.current() || !this.supported || this.attempted ||
-        this.channel.readyState !== "open") return;
+  requestDefault() {
+    if (!this.attempted) this.request(DEFAULT_VIDEO_SETTINGS);
+  }
+
+  request(values = DEFAULT_VIDEO_SETTINGS) {
+    if (!this.current() || !this.supported || this.channel.readyState !== "open" || !values ||
+        !Number.isInteger(values.quality) || values.quality < 0 || values.quality > 2 ||
+        ![30, 60].includes(values.frame_rate) || !Number.isInteger(values.preference) ||
+        values.preference < 0 || values.preference > 2) return false;
     this.attempted = true;
+    this.requestId = (this.requestId + 1) >>> 0;
+    const requested = { quality: values.quality, frame_rate: values.frame_rate,
+      preference: values.preference, request_id: this.requestId };
+    this.state.requested = requested;
+    this.state.selection = { ...requested };
     this.state.status = "pending";
-    // Go through control.send so input epoch barriers remain valid.
-    if (!control.send({ type: 11, video_settings: this.requested })) {
-      this.state.status = "failed";
-      return;
+    this.clearTimer();
+    this.requests.set(requested.request_id, requested);
+    // Bound history while still accepting delayed acknowledgements of superseded requests.
+    if (this.requests.size > 64) this.requests.delete(this.requests.keys().next().value);
+    // Preserve the reliable input epoch barrier used by the native protocol.
+    if (!control.send({ type: 11, video_settings: requested })) {
+      this.requests.delete(requested.request_id);
+      this.rollback("failed");
+      return false;
     }
     this.timer = setTimeout(() => {
       this.timer = null;
-      if (this.current() && this.state.status === "pending") this.state.status = "timeout";
+      if (this.current() && this.requestId === requested.request_id &&
+          this.state.status === "pending") this.rollback("timeout");
     }, 5000);
+    this.notify();
+    return true;
+  }
+
+  clearTimer() {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  rollback(status) {
+    this.state.status = status;
+    this.state.selection = { ...(this.state.applied || DEFAULT_VIDEO_SETTINGS) };
+    this.notify();
   }
 
   async receive(data, channel) {
@@ -143,17 +179,34 @@ class BrowserVideoSettings {
       const message = JSON.parse(data);
       if (message?.type === 3) {
         this.supported = message.host_info?.supports_video_settings === true;
-        if (!this.attempted) this.state.status = this.supported ? "waiting" : "unsupported";
-        this.request();
-      } else if (message?.type === 12 && this.attempted &&
-          ["pending", "timeout"].includes(this.state.status)) {
+        this.state.supported = this.supported;
+        if (!this.supported) {
+          this.clearTimer();
+          this.requests.clear();
+          this.attempted = false;
+          this.rollback("unsupported");
+        } else {
+          this.requestDefault();
+          this.notify();
+        }
+      } else if (message?.type === 12 && this.supported) {
         const settings = message.video_settings;
-        if (!settings || typeof settings.accepted !== "boolean" ||
-            !Object.entries(this.requested).every(([key, value]) => settings[key] === value)) return;
-        if (this.timer !== null) clearTimeout(this.timer);
-        this.timer = null;
-        this.state.status = settings.accepted ? "applied" : "rejected";
-        this.state.applied = settings.accepted ? { ...settings } : null;
+        const requested = this.requests.get(settings?.request_id);
+        if (!requested || typeof settings.accepted !== "boolean" ||
+            !Object.entries(requested).every(([key, value]) => settings[key] === value)) return;
+        this.requests.delete(settings.request_id);
+        // Signed subtraction matches the native UInt32 sequence wrap rules.
+        if (settings.accepted && (this.appliedRequestId === null ||
+            ((settings.request_id - this.appliedRequestId) | 0) >= 0)) {
+          this.state.applied = { ...settings };
+          this.appliedRequestId = settings.request_id;
+        }
+        if (settings.request_id === this.requestId) {
+          this.clearTimer();
+          this.rollback(settings.accepted ? "applied" : "rejected");
+        } else if (this.state.status !== "pending") {
+          this.rollback(this.state.status);
+        }
       }
     } catch (err) {
       // Unrelated or malformed control data cannot change negotiated settings.
@@ -162,9 +215,12 @@ class BrowserVideoSettings {
 
   close() {
     this.closed = true;
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
-    if (window.CrossDeskVideoSettings === this.state) window.CrossDeskVideoSettings = null;
+    this.clearTimer();
+    this.requests.clear();
+    if (window.CrossDeskVideoSettings === this.state) {
+      window.CrossDeskVideoSettings = null;
+      window.CrossDeskSessionControls?.renderSettings(null);
+    }
   }
 }
 
@@ -181,22 +237,21 @@ class BrowserQosSession {
     this.sender = null;
   }
 
+  start() {
+    if (this.closed || this.timer !== null || typeof this.peer.getStats !== "function") return;
+    this.previous.clear();
+    this.lastDecoded.clear();
+    this.timer = setInterval(() => void this.sample(), 500);
+    void this.sample();
+  }
+
   attach(channel) {
     if (this.closed) return;
     this.channel = channel;
-    const start = () => {
-      if (this.closed || this.timer !== null || typeof this.peer.getStats !== "function") return;
-      this.previous.clear();
-      this.lastDecoded.clear();
-      this.timer = setInterval(() => void this.sample(), 500);
-      void this.sample();
-    };
+    const start = () => this.start();
     channel.addEventListener("open", start);
     channel.addEventListener("close", () => {
-      if (this.channel !== channel) return;
-      if (this.timer !== null) clearInterval(this.timer);
-      this.timer = null;
-      this.channel = null;
+      if (this.channel === channel) this.channel = null;
     });
     channel.addEventListener("message", ({ data }) => {
       if (this.closed || this.channel !== channel) return;
@@ -275,7 +330,7 @@ class BrowserQosSession {
       });
       if (Number.isFinite(pair?.currentRoundTripTime)) rttMs = Math.round(pair.currentRoundTripTime * 1000);
       const channel = this.channel;
-      if (!sampled || channel?.readyState !== "open" || channel.bufferedAmount > 4096) return;
+      if (!sampled) return;
       const remote = pair ? stats.get(pair.remoteCandidateId) : null;
       const local = pair ? stats.get(pair.localCandidateId) : null;
       const relay = remote?.candidateType === "relay" || local?.candidateType === "relay";
@@ -287,7 +342,9 @@ class BrowserQosSession {
         packets, lost, rtt_ms: rttMs, jitter_ms: jitterMs,
         decode_ms: decodeMs, fps, frozen, width, height,
         route, relay_protocol: relayProtocol || "unknown" };
-      channel.send(JSON.stringify(report));
+      // Local network diagnostics also work with hosts without the QoS extension.
+      if (channel?.readyState === "open" && channel.bufferedAmount <= 4096)
+        channel.send(JSON.stringify(report));
       const diagnostics = { ...report, received_bps: Math.round(receivedBps),
         protocol: relayProtocol || local?.protocol,
         local_candidate_type: local?.candidateType, remote_candidate_type: remote?.candidateType,
@@ -303,6 +360,7 @@ class BrowserQosSession {
         label.title = `画面缓冲 ${Math.round(jitterMs)} ms，解码 ${Math.round(decodeMs)} ms，` +
           `接收 ${(receivedBps / 1000000).toFixed(2)} Mbps，丢包 ${(packets ? lost / packets * 100 : 0).toFixed(1)}%`;
       }
+      window.CrossDeskSessionControls?.renderNetwork(diagnostics);
     } catch (err) {
       // Missing stats or a closing channel must not interrupt remote control.
     } finally {
@@ -318,6 +376,7 @@ class BrowserQosSession {
     this.previous.clear();
     this.lastDecoded.clear();
     window.CrossDeskStats = null;
+    window.CrossDeskSessionControls?.renderNetwork(null);
     const label = document.getElementById("connection-quality");
     if (label) label.hidden = true;
   }
@@ -352,7 +411,7 @@ const ICE_DISCONNECTED_TIMEOUT_MS = Math.max(
 
 function setAudioToggleVisible(visible) {
   if (!elements.audioToggleBtn) return;
-  elements.audioToggleBtn.style.display = visible ? "inline-flex" : "none";
+  elements.audioToggleBtn.disabled = !visible;
 }
 
 function updateAudioToggleState() {
@@ -364,10 +423,12 @@ function updateAudioToggleState() {
 
   const isPlaying = !elements.audio.paused && !elements.audio.muted;
   elements.audioToggleBtn.classList.toggle("audio-is-playing", isPlaying);
-  const actionLabel = isPlaying ? "静音" : "播放音频";
+  const actionLabel = isPlaying ? "声音" : "静音";
+  const label = document.getElementById("audio-toggle-label");
+  if (label) label.textContent = actionLabel;
   elements.audioToggleBtn.setAttribute(
     "aria-label",
-    actionLabel
+    isPlaying ? "静音" : "播放音频"
   );
   elements.audioToggleBtn.setAttribute(
     "aria-pressed",
@@ -1132,6 +1193,7 @@ function bindDataChannel(channel, peer) {
   const opened = () => {
     if (peer !== pc || control.dataChannel !== channel) return;
     enableDataChannelUi(true);
+    peer.crossdeskQos.start();
     // Only probe hosts that advertise support in the channel's DCEP metadata.
     // Legacy hosts parse control messages as numeric action types and would
     // log an error for an unsolicited web_qos_hello.
@@ -1246,15 +1308,7 @@ function connect() {
   }
   if (elements.connectedOverlay) {
     elements.connectedOverlay.style.display = "block";
-    // Show panel initially when connecting
-    if (elements.connectedPanel) {
-      isPanelMinimized = false;
-      panelAlignment = "left"; // Reset to left alignment
-      minimizedPanelPosition = null;
-      elements.connectedPanel.classList.remove("minimized");
-      positionExpandedPanel();
-      hideConnectedPanel(); // Start auto-hide timer
-    }
+    window.CrossDeskSessionControls?.start();
   }
   // Show connecting overlay
   if (elements.connectingOverlay) {
@@ -1295,19 +1349,7 @@ function disconnect() {
   if (elements.connectingOverlay) {
     elements.connectingOverlay.style.display = "none";
   }
-  // Clear panel hide timer and reset panel state
-  if (panelHideTimer) {
-    clearTimeout(panelHideTimer);
-    panelHideTimer = null;
-  }
-  isPanelMinimized = false;
-  isDragging = false;
-  panelAlignment = "left"; // Reset to left alignment
-  minimizedPanelPosition = null;
-  if (elements.connectedPanel) {
-    elements.connectedPanel.classList.remove("minimized");
-    positionExpandedPanel();
-  }
+  window.CrossDeskSessionControls?.stop();
 
   if (!sendLeaveRequest()) {
     console.warn("[CrossDesk] Skip leave_transmission: signaling unavailable during disconnect");
@@ -1336,6 +1378,7 @@ function hideConnectingOverlayOnFirstFrame() {
       if (elements.connectingOverlay) {
         elements.connectingOverlay.style.display = "none";
       }
+      window.CrossDeskSessionControls?.setVideoReady();
       if (frameCallbackId !== null) {
         elements.video.cancelVideoFrameCallback(frameCallbackId);
       }
@@ -1346,6 +1389,7 @@ function hideConnectingOverlayOnFirstFrame() {
   
   // Fallback: use loadeddata event (first frame decoded)
   const onFirstFrame = () => {
+    window.CrossDeskSessionControls?.setVideoReady();
     if (elements.connectingOverlay) {
       elements.connectingOverlay.style.display = "none";
     }
@@ -1417,6 +1461,7 @@ function enableConnectButton(enabled) {
 }
 
 function enableDataChannelUi(enabled) {
+  window.CrossDeskSessionControls?.setConnected(enabled);
   if (elements.displaySelect) {
     elements.displaySelect.disabled = !enabled;
   }
@@ -1497,7 +1542,8 @@ if (elements.disconnectBtn) {
 }
 
 if (elements.disconnectConnected) {
-  elements.disconnectConnected.addEventListener("click", disconnect);
+  elements.disconnectConnected.addEventListener("click", () =>
+    window.CrossDeskSessionControls?.showPage("disconnect"));
 }
 
 if (elements.audioToggleBtn) {
@@ -1514,486 +1560,11 @@ if (elements.displaySelect) {
   elements.displaySelect.addEventListener("change", setDisplayId);
 }
 
-// Panel minimize/maximize and drag functionality
-let panelHideTimer = null;
-const PANEL_HIDE_DELAY = 3000; // 3 seconds
-let isPanelMinimized = false;
-let isDragging = false;
-let dragStartX = 0;
-let dragStartY = 0;
-let panelStartLeft = 0;
-let panelStartTop = 0;
-let panelAlignment = "left"; // "left" or "right" - tracks which edge the minimized panel is closer to
-let minimizedPanelPosition = null;
-const SNAP_THRESHOLD = 20; // Distance in pixels to trigger edge snapping
-
-function positionExpandedPanel(left = 0, top = 0) {
-  if (!elements.connectedPanel) return;
-  const maxLeft = Math.max(0, window.innerWidth - elements.connectedPanel.offsetWidth);
-  const maxTop = Math.max(0, window.innerHeight - elements.connectedPanel.offsetHeight);
-  minimizedPanelPosition = {
-    left: Math.max(0, Math.min(left, maxLeft)),
-    top: Math.max(0, Math.min(top, maxTop)),
-  };
-  elements.connectedPanel.style.left = `${minimizedPanelPosition.left}px`;
-  elements.connectedPanel.style.top = `${minimizedPanelPosition.top}px`;
-  elements.connectedPanel.style.right = "auto";
-  elements.connectedPanel.style.bottom = "auto";
-}
-
-function clampMinimizedPanelPosition(left, top) {
-  const panelWidth = elements.connectedPanel?.offsetWidth || 48;
-  const panelHeight = elements.connectedPanel?.offsetHeight || 48;
-  return {
-    left: Math.max(0, Math.min(left, window.innerWidth - panelWidth)),
-    top: Math.max(0, Math.min(top, window.innerHeight - panelHeight)),
-  };
-}
-
-function rememberMinimizedPanelPosition() {
-  if (!elements.connectedPanel) return;
-  const rect = elements.connectedPanel.getBoundingClientRect();
-  minimizedPanelPosition = clampMinimizedPanelPosition(rect.left, rect.top);
-}
-
-function togglePanelMinimize() {
-  if (!elements.connectedPanel) return;
-  if (isPanelMinimized) {
-    rememberMinimizedPanelPosition();
-    isPanelMinimized = false;
-    elements.connectedPanel.classList.remove("minimized");
-    positionExpandedPanel(
-      minimizedPanelPosition.left,
-      minimizedPanelPosition.top
-    );
-  } else {
-    minimizePanel();
-  }
-  
-  // Clear hide timer when toggling
-  if (panelHideTimer) {
-    clearTimeout(panelHideTimer);
-    panelHideTimer = null;
-  }
-}
-
-function minimizePanel() {
-  if (!elements.connectedPanel || isPanelMinimized) return;
-
-  const iconRect = elements.panelCollapsedBar.getBoundingClientRect();
-  const targetPosition = minimizedPanelPosition || {
-    left: iconRect.left,
-    top: iconRect.top,
-  };
-
-  isPanelMinimized = true;
-  elements.connectedPanel.classList.add("minimized");
-  minimizedPanelPosition = clampMinimizedPanelPosition(
-    targetPosition.left,
-    targetPosition.top
-  );
-
-  elements.connectedPanel.style.left = `${minimizedPanelPosition.left}px`;
-  elements.connectedPanel.style.top = `${minimizedPanelPosition.top}px`;
-  elements.connectedPanel.style.right = "auto";
-  elements.connectedPanel.style.bottom = "auto";
-
-  elements.connectedPanel.offsetHeight;
-  updatePanelAlignment();
-}
-
-function updatePanelAlignment() {
-  if (!elements.connectedPanel) return;
-  const rect = elements.connectedPanel.getBoundingClientRect();
-  const viewportWidth = window.innerWidth;
-  const distanceFromLeft = rect.left;
-  const distanceFromRight = viewportWidth - rect.right;
-  
-  // Determine which edge is closer
-  if (distanceFromRight < distanceFromLeft) {
-    panelAlignment = "right";
-  } else {
-    panelAlignment = "left";
-  }
-}
-
-function applyPanelAlignment() {
-  if (!elements.connectedPanel) return;
-  
-  // This function is no longer used for expanding from minimized state
-  // The expansion logic is now handled in togglePanelMinimize and maximizePanel
-  // Keep this for backward compatibility but it shouldn't reset position
-  const rect = elements.connectedPanel.getBoundingClientRect();
-  
-  if (panelAlignment === "right") {
-    elements.connectedPanel.style.right = "0";
-    elements.connectedPanel.style.left = "auto";
-  } else {
-    elements.connectedPanel.style.left = "0";
-    elements.connectedPanel.style.right = "auto";
-  }
-  // Don't reset top/bottom - keep current position
-}
-
-function showConnectedPanel() {
-  if (!elements.connectedPanel || isPanelMinimized) return;
-
-  // Clear existing hide timer
-  if (panelHideTimer) {
-    clearTimeout(panelHideTimer);
-    panelHideTimer = null;
-  }
-}
-
-function hideConnectedPanel() {
-  if (!elements.connectedPanel) return;
-  if (panelHideTimer) {
-    clearTimeout(panelHideTimer);
-  }
-  panelHideTimer = setTimeout(() => {
-    panelHideTimer = null;
-    if (elements.connectedPanel && !isPanelMinimized && !isDragging &&
-        !elements.connectedPanel.classList.contains("pointer-lock-within")) {
-      minimizePanel();
-    }
-  }, PANEL_HIDE_DELAY);
-}
-
-// Drag functionality for collapsed bar
-function startDrag(e) {
-  if (!elements.connectedPanel) return;
-  isDragging = true;
-  if (panelHideTimer) {
-    clearTimeout(panelHideTimer);
-    panelHideTimer = null;
-  }
-  // Notify control manager to block mouse events during drag
-  if (control && control.setDraggingPanel) {
-    control.setDraggingPanel(true);
-  }
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-  dragStartX = clientX;
-  dragStartY = clientY;
-  
-  const rect = elements.connectedPanel.getBoundingClientRect();
-  panelStartLeft = rect.left;
-  panelStartTop = rect.top;
-  
-  e.preventDefault();
-  document.addEventListener("mousemove", onDrag);
-  document.addEventListener("mouseup", stopDrag);
-  document.addEventListener("touchmove", onDrag);
-  document.addEventListener("touchend", stopDrag);
-}
-
-function onDrag(e) {
-  if (!isDragging || !elements.connectedPanel) return;
-  // Prevent event from propagating to other handlers
-  e.preventDefault();
-  e.stopPropagation();
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-  const deltaX = clientX - dragStartX;
-  const deltaY = clientY - dragStartY;
-  const newLeft = panelStartLeft + deltaX;
-  const newTop = panelStartTop + deltaY;
-  
-  // Constrain to viewport
-  const panelWidth = elements.connectedPanel.offsetWidth;
-  const panelHeight = elements.connectedPanel.offsetHeight;
-  const maxLeft = window.innerWidth - panelWidth;
-  const maxTop = window.innerHeight - panelHeight;
-  const constrainedLeft = Math.max(0, Math.min(newLeft, maxLeft));
-  const constrainedTop = Math.max(0, Math.min(newTop, maxTop));
-  
-  elements.connectedPanel.style.left = `${constrainedLeft}px`;
-  elements.connectedPanel.style.top = `${constrainedTop}px`;
-  elements.connectedPanel.style.right = "auto";
-  elements.connectedPanel.style.bottom = "auto";
-
-  if (!isPanelMinimized) {
-    minimizedPanelPosition = {
-      left: constrainedLeft,
-      top: constrainedTop,
-    };
-  }
-  
-  // Update alignment based on position
-  const viewportWidth = window.innerWidth;
-  const distanceFromLeft = constrainedLeft;
-  const distanceFromRight = viewportWidth - constrainedLeft - panelWidth;
-  
-  // Determine which edge is closer (with a small threshold to avoid flickering)
-  if (distanceFromRight < distanceFromLeft) {
-    panelAlignment = "right";
-  } else {
-    panelAlignment = "left";
-  }
-}
-
-function stopDrag() {
-  isDragging = false;
-  // Notify control manager to resume mouse events after drag
-  if (control && control.setDraggingPanel) {
-    control.setDraggingPanel(false);
-  }
-  document.removeEventListener("mousemove", onDrag);
-  document.removeEventListener("mouseup", stopDrag);
-  document.removeEventListener("touchmove", onDrag);
-  document.removeEventListener("touchend", stopDrag);
-  
-  // Snap to nearest edge if close enough
-  if (elements.connectedPanel && isPanelMinimized) {
-    snapToEdge();
-    updatePanelAlignment();
-  }
-}
-
-function snapToEdge() {
-  if (!elements.connectedPanel || !isPanelMinimized) return;
-  
-  const rect = elements.connectedPanel.getBoundingClientRect();
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const panelWidth = rect.width;
-  const panelHeight = rect.height;
-  
-  const distanceFromLeft = rect.left;
-  const distanceFromRight = viewportWidth - rect.right;
-  const distanceFromTop = rect.top;
-  const distanceFromBottom = viewportHeight - rect.bottom;
-  
-  // Find the nearest edge
-  const minHorizontal = Math.min(distanceFromLeft, distanceFromRight);
-  const minVertical = Math.min(distanceFromTop, distanceFromBottom);
-  
-  // Snap to horizontal edge if close enough
-  if (minHorizontal <= SNAP_THRESHOLD) {
-    if (distanceFromLeft < distanceFromRight) {
-      elements.connectedPanel.style.left = "0";
-      elements.connectedPanel.style.right = "auto";
-      panelAlignment = "left";
-    } else {
-      elements.connectedPanel.style.right = "0";
-      elements.connectedPanel.style.left = "auto";
-      panelAlignment = "right";
-    }
-  }
-  
-  // Snap to vertical edge if close enough
-  if (minVertical <= SNAP_THRESHOLD) {
-    if (distanceFromTop < distanceFromBottom) {
-      elements.connectedPanel.style.top = "0";
-      elements.connectedPanel.style.bottom = "auto";
-    } else {
-      elements.connectedPanel.style.bottom = "0";
-      elements.connectedPanel.style.top = "auto";
-    }
-  }
-}
-
-// Show panel when mouse moves to top area or when interacting with panel
-if (elements.connectedOverlay) {
-  const topTriggerHeight = 80; // Height of top area that triggers panel show
-  
-  elements.connectedOverlay.addEventListener("mousemove", (e) => {
-    if (e.clientY <= topTriggerHeight) {
-      showConnectedPanel();
-    } else if (
-      !isDragging &&
-      !elements.connectedPanel?.matches(":hover") &&
-      !elements.connectedPanel?.classList.contains("pointer-lock-within") &&
-      !isPanelMinimized
-    ) {
-      hideConnectedPanel();
-    }
-  });
-  
-  elements.connectedOverlay.addEventListener("mouseleave", () => {
-    if (!isPanelMinimized && !isDragging) {
-      hideConnectedPanel();
-    }
-  });
-  
-  // Keep panel visible when hovering over it
-  if (elements.connectedPanel) {
-    elements.connectedPanel.addEventListener("mouseenter", () => {
-      if (!isPanelMinimized) {
-        showConnectedPanel();
-      }
-    });
-    
-    elements.connectedPanel.addEventListener("mouseleave", () => {
-      if (!isPanelMinimized && !isDragging) {
-        hideConnectedPanel();
-      }
-    });
-  }
-  
-  // Minimize on collapsed bar click (only when expanded)
-  if (elements.panelCollapsedBar) {
-    // Use a shared variable to track drag state across event handlers
-    let panelDragStarted = false;
-    let panelDragStartTime = 0;
-    let panelDragStartPos = { x: 0, y: 0 };
-    
-    // Start drag on collapsed bar (prevent click when dragging)
-    elements.panelCollapsedBar.addEventListener("mousedown", (e) => {
-      // Immediately prevent event from being handled by control.js
-      e.stopPropagation();
-      e.preventDefault();
-      // Immediately set dragging state to prevent mouse movement
-      if (control && control.setDraggingPanel) {
-        control.setDraggingPanel(true);
-      }
-      
-      panelDragStarted = false;
-      panelDragStartTime = Date.now();
-      panelDragStartPos.x = e.clientX;
-      panelDragStartPos.y = e.clientY;
-      
-      const onMouseMove = (moveEvent) => {
-        moveEvent.stopPropagation();
-        const deltaX = Math.abs(moveEvent.clientX - panelDragStartPos.x);
-        const deltaY = Math.abs(moveEvent.clientY - panelDragStartPos.y);
-        if (deltaX > 5 || deltaY > 5) {
-          panelDragStarted = true;
-          startDrag(moveEvent);
-          document.removeEventListener("mousemove", onMouseMove);
-          document.removeEventListener("mouseup", onMouseUp);
-        }
-      };
-      
-      const onMouseUp = (upEvent) => {
-        upEvent.stopPropagation();
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-        
-        if (upEvent.crossdeskPointerCancelled) {
-          panelDragStarted = false;
-          control?.setDraggingPanel(false);
-          return;
-        }
-
-        // If it was a quick click (not a drag), handle it immediately
-        const clickDuration = Date.now() - panelDragStartTime;
-        const deltaX = Math.abs(upEvent.clientX - panelDragStartPos.x);
-        const deltaY = Math.abs(upEvent.clientY - panelDragStartPos.y);
-        
-        if (!panelDragStarted && clickDuration < 300 && deltaX <= 5 && deltaY <= 5) {
-          // It was a click, not a drag
-          if (control && control.setDraggingPanel) {
-            control.setDraggingPanel(false);
-          }
-          // Handle click immediately
-          if (!isPanelMinimized) {
-            minimizePanel();
-          } else {
-            togglePanelMinimize();
-          }
-        } else if (panelDragStarted) {
-          // It was a drag, reset dragging state
-          if (control && control.setDraggingPanel) {
-            control.setDraggingPanel(false);
-          }
-        } else {
-          // Reset dragging state if it wasn't a click or drag
-          if (control && control.setDraggingPanel) {
-            control.setDraggingPanel(false);
-          }
-        }
-        // Reset drag flag
-        panelDragStarted = false;
-      };
-      
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
-    });
-    
-    elements.panelCollapsedBar.addEventListener("touchstart", (e) => {
-      // Immediately prevent event from being handled by control.js
-      e.stopPropagation();
-      e.preventDefault();
-      // Immediately set dragging state to prevent mouse movement
-      if (control && control.setDraggingPanel) {
-        control.setDraggingPanel(true);
-      }
-      
-      panelDragStarted = false;
-      panelDragStartTime = Date.now();
-      panelDragStartPos.x = e.touches[0].clientX;
-      panelDragStartPos.y = e.touches[0].clientY;
-      
-      const onTouchMove = (moveEvent) => {
-        moveEvent.stopPropagation();
-        const deltaX = Math.abs(moveEvent.touches[0].clientX - panelDragStartPos.x);
-        const deltaY = Math.abs(moveEvent.touches[0].clientY - panelDragStartPos.y);
-        if (deltaX > 5 || deltaY > 5) {
-          panelDragStarted = true;
-          startDrag(moveEvent);
-          document.removeEventListener("touchmove", onTouchMove);
-          document.removeEventListener("touchend", onTouchEnd);
-    }
-      };
-      
-      const onTouchEnd = (endEvent) => {
-        endEvent.stopPropagation();
-        document.removeEventListener("touchmove", onTouchMove);
-        document.removeEventListener("touchend", onTouchEnd);
-        
-        // If it was a quick tap (not a drag), handle it immediately
-        const tapDuration = Date.now() - panelDragStartTime;
-        const endX = endEvent.changedTouches && endEvent.changedTouches[0] ? endEvent.changedTouches[0].clientX : panelDragStartPos.x;
-        const endY = endEvent.changedTouches && endEvent.changedTouches[0] ? endEvent.changedTouches[0].clientY : panelDragStartPos.y;
-        const deltaX = Math.abs(endX - panelDragStartPos.x);
-        const deltaY = Math.abs(endY - panelDragStartPos.y);
-        
-        if (!panelDragStarted && tapDuration < 300 && deltaX <= 5 && deltaY <= 5) {
-          // It was a tap, not a drag
-          if (control && control.setDraggingPanel) {
-            control.setDraggingPanel(false);
-          }
-          // Handle tap immediately
-          if (!isPanelMinimized) {
-            minimizePanel();
-          } else {
-            togglePanelMinimize();
-          }
-        } else if (panelDragStarted) {
-          // It was a drag, reset dragging state
-          if (control && control.setDraggingPanel) {
-            control.setDraggingPanel(false);
-          }
-        } else {
-          // Reset dragging state if it wasn't a tap or drag
-          if (control && control.setDraggingPanel) {
-            control.setDraggingPanel(false);
-          }
-        }
-        // Reset drag flag
-        panelDragStarted = false;
-      };
-      
-      document.addEventListener("touchmove", onTouchMove);
-      document.addEventListener("touchend", onTouchEnd);
-    }, { passive: false });
-  }
-  
-  
-  // Show panel when clicking on video (for touch devices)
-  if (elements.video) {
-    elements.video.addEventListener("click", (e) => {
-      if (
-        !isPanelMinimized &&
-        (e.clientY <= topTriggerHeight || e.target === elements.video)
-      ) {
-        showConnectedPanel();
-        hideConnectedPanel();
-      }
-    });
-  }
-}
+// Session controls own the mobile-style floating orb and menu.
+window.CrossDeskSession = {
+  requestVideoSettings(values) { return pc?.crossdeskVideoSettings?.request(values) || false; },
+  disconnect,
+};
 
 window.connect = connect;
 window.disconnect = disconnect;
