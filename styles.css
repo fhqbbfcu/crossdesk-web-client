@@ -829,7 +829,7 @@ video {
   font-variant-numeric: tabular-nums;
   line-height: 1.4;
   text-align: right;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .connection-status-group .status-indicator {

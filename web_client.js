@@ -1,5 +1,5 @@
 // Update this and the asset cache keys with: node scripts/set-version.js <version>
-const WEB_CLIENT_VERSION = "2026.10.16.2";
+const WEB_CLIENT_VERSION = "2026.10.16.3";
 
 const elements = {
   clientVersion: document.getElementById("client-version"),
@@ -140,6 +140,7 @@ class BrowserQosSession {
       let packets = 0, lost = 0, jitterMs = 0, decodeMs = 0, fps = 0;
       let frozen = false, sampled = false, rttMs = 0, pair = null;
       let receivedBps = 0;
+      let width = 0, height = 0;
       const displayedTrack = elements.video?.srcObject?.getVideoTracks?.()[0]?.id;
       stats.forEach((report) => {
         if (report.type === "transport" && report.selectedCandidatePairId)
@@ -171,17 +172,19 @@ class BrowserQosSession {
         // decoded by the browser. It must not be mistaken for a frozen screen.
         if (displayedTrack && report.trackIdentifier &&
             report.trackIdentifier !== displayedTrack) return;
+        width = report.frameWidth || width;
+        height = report.frameHeight || height;
         const frames = delta("framesDecoded");
         if (frames) this.lastDecoded.set(report.id, report.timestamp);
-        // freezeCount may update only after playback resumes. Detect an
-        // ongoing decoder/network stall as well, using this report's clock.
-        if (report.packetsReceived > 0 &&
+        // freezeCount can increment after playback has already recovered.
+        // Only report an ongoing stall while new media is actually arriving;
+        // idle sources and paused/background reception are not decoder load.
+        if (received > 0 &&
             report.timestamp - this.lastDecoded.get(report.id) >= 1500) frozen = true;
         const emitted = delta("jitterBufferEmittedCount");
         if (emitted) jitterMs = Math.max(jitterMs, delta("jitterBufferDelay") * 1000 / emitted);
         if (frames) decodeMs = Math.max(decodeMs, delta("totalDecodeTime") * 1000 / frames);
         fps = Math.max(fps, frames / elapsed);
-        frozen ||= delta("freezeCount") > 0;
       });
       this.previous = next;
       for (const id of this.lastDecoded.keys()) {
@@ -194,21 +197,30 @@ class BrowserQosSession {
       if (Number.isFinite(pair?.currentRoundTripTime)) rttMs = Math.round(pair.currentRoundTripTime * 1000);
       const channel = this.channel;
       if (!sampled || channel?.readyState !== "open" || channel.bufferedAmount > 4096) return;
-      const report = { type: "web_qos", version: 1, sequence: ++this.sequence,
-        packets, lost, rtt_ms: rttMs, jitter_ms: jitterMs,
-        decode_ms: decodeMs, fps, frozen };
-      channel.send(JSON.stringify(report));
       const remote = pair ? stats.get(pair.remoteCandidateId) : null;
       const local = pair ? stats.get(pair.localCandidateId) : null;
       const relay = remote?.candidateType === "relay" || local?.candidateType === "relay";
+      const route = relay ? "relay" : local && remote ? "direct" : "unknown";
+      // ICE's candidate protocol can be UDP even when TURN uses TCP/TLS.
+      // Only the local relay candidate exposes that browser-to-TURN transport.
+      const relayProtocol = local?.candidateType === "relay" ? local.relayProtocol : undefined;
+      const report = { type: "web_qos", version: 1, sequence: ++this.sequence,
+        packets, lost, rtt_ms: rttMs, jitter_ms: jitterMs,
+        decode_ms: decodeMs, fps, frozen, width, height,
+        route, relay_protocol: relayProtocol || "unknown" };
+      channel.send(JSON.stringify(report));
       const diagnostics = { ...report, received_bps: Math.round(receivedBps),
-        route: relay ? "relay" : "direct", protocol: local?.relayProtocol || local?.protocol,
+        protocol: relayProtocol || local?.protocol,
+        local_candidate_type: local?.candidateType, remote_candidate_type: remote?.candidateType,
         sender: this.sender };
       window.CrossDeskStats = diagnostics;
       const label = document.getElementById("connection-quality");
       if (label) {
         label.hidden = false;
-        label.textContent = `${Math.round(fps)} fps · ${rttMs} ms · ${relay ? "中继" : "直连"}`;
+        const routeLabel = route === "relay"
+          ? `中继${relayProtocol ? "/" + relayProtocol.toUpperCase() : ""}`
+          : route === "direct" ? "直连" : "路径待确认";
+        label.textContent = `${width && height ? `${width}×${height} · ` : ""}${Math.round(fps)} fps · ${rttMs} ms · ${routeLabel}`;
         label.title = `画面缓冲 ${Math.round(jitterMs)} ms，解码 ${Math.round(decodeMs)} ms，` +
           `接收 ${(receivedBps / 1000000).toFixed(2)} Mbps，丢包 ${(packets ? lost / packets * 100 : 0).toFixed(1)}%`;
       }
