@@ -165,6 +165,10 @@ manifest.json
 
 ### 3. 动态 TURN 凭据
 
+新版服务端在 Offer 的 `ice` 字段中下发版本 1 的完整会话配置。网页校验其有效期后使用其中全部 STUN / TURN 节点，**以该列表替代本地 `iceServers` 和旧 TURN 凭据**；空列表表示仅尝试本地候选，格式错误或即将过期的列表会提示重试。备用 STUN 节点应配置在服务端，使 Web 与桌面端使用同一套节点。
+
+以下配置用于没有下发 `ice` 字段的旧服务端：
+
 `iceServers` 通常只配置 STUN。信令服务在登录和会话协商消息中下发临时 TURN 凭据，浏览器通过 [turn_credentials.js](turn_credentials.js) 校验后保存在内存，并在创建 WebRTC 连接时加入 UDP / TCP TURN 地址。
 
 - 凭据包含 `host`、`port`、`username`、`password` 和 `expires_at`（Unix 秒）。过期凭据不会继续用于新连接。
@@ -178,7 +182,7 @@ manifest.json
 | 参数 | 默认值 | 用途 |
 | --- | --- | --- |
 | `signalingUrl` | `wss://api.crossdesk.cn:9099` | 信令地址 |
-| `iceServers` | `[{ urls: ["stun:api.crossdesk.cn:3478"] }]` | 基础 ICE 服务器列表 |
+| `iceServers` | `[{ urls: ["stun:api.crossdesk.cn:3478"] }]` | 旧服务端未下发会话 ICE 配置时的基础列表 |
 | `heartbeatIntervalMs` | `3000` | 心跳发送间隔 |
 | `heartbeatTimeoutMs` | `10000` | 心跳响应超时 |
 | `reconnectDelayMs` | `2000` | 信令重连初始延迟，随后指数增加 |
@@ -210,6 +214,18 @@ manifest.json
 | 没有声音 | 确认被控端提供音频轨道且有声音，再检查页面音频按钮、站点播放权限及本机音量 |
 | 更新配置后仍连旧服务器 | 检查配置是否在主脚本之前加载、发布是否完成；强制刷新并检查实际下载的 HTML / JS |
 | Fork 后地址或主屏幕入口不对 | 检查 Pages 的 Custom domain、`CNAME`、发布目录及 `manifest.json` 的 `start_url` |
+
+### 排查直连失败
+
+从创建 `RTCPeerConnection` 起，网页在内存中维护 `window.CrossDeskIceDiagnostics`，无需收到视频即可记录 ICE 状态、候选类型、IPv4 / IPv6 / mDNS、候选检查结果和 STUN / TURN 错误码。断开后保留最后一个 PeerConnection 的诊断，下一次连接时重置。在浏览器开发者工具 Console 中运行：
+
+```js
+JSON.stringify(window.CrossDeskIceDiagnostics, null, 2)
+```
+
+`first_route` 是首次采样到的路径；`route` 是当前路径；`route_at_30s` 是 PeerConnection 创建满 30 秒后的首次采样路径，提前断开的连接保持 `null`。`candidate_pairs` 可区分候选缺失、检查失败与选中了中继。诊断不包含设备 ID、候选 IP、完整 SDP 或凭据，也不会自动上传；候选与事件列表均有长度限制。它不是总体直连率统计，需要使用相同设备和网络比较多次连接。
+
+Web 支持缓存先于 Offer / 远端描述到达的候选，并用会话标识和 `ufrag` 隔离候选。旧服务端省略这些字段时保留兼容处理，但无法完全识别同一设备旧连接的无标记消息。新版被控端还会在发出 Offer 后立即收集候选，并提供 ICE-TCP 直连候选；这些能力需要更新并重新构建桌面端及 MiniRTC。
 
 <a id="development"></a>
 

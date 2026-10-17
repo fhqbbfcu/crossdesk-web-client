@@ -1,5 +1,5 @@
 // Update this and the asset cache keys with: node scripts/set-version.js <version>
-const WEB_CLIENT_VERSION = "2026.10.16.8";
+const WEB_CLIENT_VERSION = "2026.10.17.1";
 
 const elements = {
   clientVersion: document.getElementById("client-version"),
@@ -81,11 +81,224 @@ let connectHintTimer = null;
 let connectionTimeoutTimer = null;
 let iceDisconnectedTimer = null;
 let isConnectionSessionActive = false;
+let connectionSession = null;
+let connectionAttempt = 0;
+const MAX_PENDING_ICE_CANDIDATES = 256;
+const ICE_CANDIDATE_TTL_MS = 30000;
 const CONNECT_BUTTON_DEFAULT_TEXT = elements.connectBtn
   ? elements.connectBtn.textContent
   : "连接";
 let trackIndex = 0; // Track index for display_id (0, 1, 2, ...)
 const trackMap = new Map(); // Map<index, track> - stores tracks by their display_id index
+
+// Pin routing to the connection attempt, not to editable form fields. Older
+// signaling servers may omit routing fields; validate every field they supply.
+function isCurrentSessionMessage(message) {
+  const session = connectionSession;
+  return isConnectionSessionActive && session &&
+    (message.transmission_id === undefined || message.transmission_id === session.transmissionId) &&
+    (message.remote_user_id === undefined || message.remote_user_id === session.transmissionId);
+}
+
+function iceUfrags(sdp) {
+  return new Set(Array.from((sdp || "").matchAll(/^a=ice-ufrag:([^\s]+)\s*$/gm), match => match[1]));
+}
+
+function parseRemoteIceCandidate(message) {
+  if (typeof message.candidate !== "string" || message.candidate.length > 4096 ||
+      /[\r\n\0]/.test(message.candidate)) return null;
+  const candidate = message.candidate.replace(/^a=/, "").trim();
+  if (candidate && !candidate.startsWith("candidate:")) return null;
+  const init = { candidate };
+  if (message.mid !== undefined && message.mid !== null) {
+    if (typeof message.mid !== "string" || !message.mid || message.mid.length > 256 ||
+        /[\s\0]/.test(message.mid)) return null;
+    init.sdpMid = message.mid;
+  }
+  if (message.sdpMLineIndex !== undefined && message.sdpMLineIndex !== null) {
+    if (!Number.isInteger(message.sdpMLineIndex) || message.sdpMLineIndex < 0 ||
+        message.sdpMLineIndex > 65535) return null;
+    init.sdpMLineIndex = message.sdpMLineIndex;
+  }
+  if (candidate && init.sdpMid === undefined && init.sdpMLineIndex === undefined) return null;
+  const embedded = candidate.match(/(?:^|\s)ufrag\s+(\S+)(?:\s|$)/)?.[1];
+  for (const ufrag of [message.ufrag, message.usernameFragment, embedded]) {
+    if (ufrag === undefined || ufrag === null) continue;
+    if (typeof ufrag !== "string" || !ufrag || ufrag.length > 256 || /[\s\0]/.test(ufrag) ||
+        (init.usernameFragment && init.usernameFragment !== ufrag)) return null;
+    init.usernameFragment = ufrag;
+  }
+  return init;
+}
+
+function receiveRemoteIceCandidate(message) {
+  if (!isCurrentSessionMessage(message)) return;
+  const session = connectionSession;
+  const init = parseRemoteIceCandidate(message);
+  if (!init) {
+    session.rejectedCandidates++;
+    return;
+  }
+  if (session.retiredUfrags.has(init.usernameFragment)) {
+    session.rejectedCandidates++;
+    return;
+  }
+  const now = Date.now();
+  session.pendingCandidates = session.pendingCandidates.filter(entry => now - entry.at < ICE_CANDIDATE_TTL_MS);
+  const key = JSON.stringify(init);
+  if (session.pendingCandidates.some(entry => entry.key === key) ||
+      pc?.crossdeskCandidateKeys?.has(key)) return;
+  if (session.pendingCandidates.length + (pc?.crossdeskPendingCandidateAdds || 0) >= MAX_PENDING_ICE_CANDIDATES) {
+    session.rejectedCandidates++;
+    return;
+  }
+  session.pendingCandidates.push({ init, key, at: now });
+  if (pc?.crossdeskRemoteDescriptionReady) flushRemoteIceCandidates(pc);
+}
+
+function flushRemoteIceCandidates(peer) {
+  const session = peer.crossdeskSession;
+  if (peer !== pc || session !== connectionSession || !isConnectionSessionActive ||
+      !peer.crossdeskRemoteDescriptionReady) return;
+  const pending = session.pendingCandidates;
+  session.pendingCandidates = [];
+  for (const entry of pending) {
+    const ufrag = entry.init.usernameFragment;
+    if (Date.now() - entry.at >= ICE_CANDIDATE_TTL_MS || session.retiredUfrags.has(ufrag)) continue;
+    if (ufrag && !peer.crossdeskRemoteUfrags.has(ufrag)) {
+      // A candidate for the next offer can arrive before that offer. Keep it
+      // bounded and separate from the current ICE generation.
+      session.pendingCandidates.push(entry);
+      continue;
+    }
+    if (peer.crossdeskCandidateKeys.has(entry.key)) continue;
+    if (peer.crossdeskCandidateKeys.size >= 512)
+      peer.crossdeskCandidateKeys.delete(peer.crossdeskCandidateKeys.values().next().value);
+    peer.crossdeskCandidateKeys.add(entry.key);
+    peer.crossdeskPendingCandidateAdds++;
+    peer.crossdeskCandidateChain = peer.crossdeskCandidateChain.then(async () => {
+      try {
+        if (!isConnectionSessionActive || peer !== pc || connectionSession !== session) return;
+        await peer.addIceCandidate(entry.init);
+        if (peer === pc) peer.crossdeskIceDiagnostics.candidate("remote", entry.init.candidate);
+      } catch (err) {
+        if (peer !== pc) return;
+        session.rejectedCandidates++;
+        peer.crossdeskIceDiagnostics.event("candidate_error", { name: err.name });
+        console.warn("[CrossDesk] Could not add ICE candidate", err.name);
+      } finally {
+        peer.crossdeskPendingCandidateAdds--;
+      }
+    });
+  }
+}
+
+// Keep diagnostics useful before media arrives and after failure, without
+// recording SDP, ICE/TURN credentials, device IDs, or candidate IP addresses.
+function describeIceCandidate(candidate) {
+  const fields = typeof candidate === "string" ? candidate.replace(/^a=/, "").split(/\s+/) : null;
+  const address = fields ? fields[4] : candidate?.address;
+  const type = fields ? fields[7] : candidate?.candidateType;
+  const protocol = (fields ? fields[2] : candidate?.protocol)?.toLowerCase();
+  return {
+    type: ["host", "srflx", "prflx", "relay"].includes(type) ? type : "unknown",
+    protocol: ["udp", "tcp"].includes(protocol) ? protocol : "unknown",
+    family: !address ? "unknown" : address.endsWith(".local") ? "mdns" : address.includes(":") ? "ipv6" : "ipv4",
+    relay_protocol: candidate?.relayProtocol,
+  };
+}
+
+function selectedIcePair(stats) {
+  let pair = null;
+  stats.forEach(report => {
+    if (report.type === "transport" && report.selectedCandidatePairId)
+      pair = stats.get(report.selectedCandidatePairId) || pair;
+  });
+  if (!pair) stats.forEach(report => {
+    if (report.type === "candidate-pair" && report.state === "succeeded" &&
+        (report.nominated || report.selected)) pair = report;
+  });
+  return pair;
+}
+
+class BrowserIceDiagnostics {
+  constructor(peer) {
+    this.peer = peer;
+    this.session = peer.crossdeskSession;
+    this.startedAt = Date.now();
+    this.state = {
+      version: 1, attempt: this.session.id, generation: this.session.generation,
+      started_at: new Date(this.startedAt).toISOString(), elapsed_ms: 0,
+      route: "unknown", first_route: null, route_at_30s: null,
+      local_candidates: [], remote_candidates: [], candidate_pairs: [], events: [],
+    };
+    window.CrossDeskIceDiagnostics = this.state;
+    this.event("created");
+    for (const event of ["icegatheringstatechange", "signalingstatechange", "connectionstatechange"]) {
+      peer.addEventListener(event, () => {
+        if (peer === pc) this.event(event);
+      });
+    }
+    peer.addEventListener("icecandidateerror", event => {
+      if (peer !== pc) return;
+      this.event("server_error", { code: event.errorCode,
+        scheme: /^(stuns?|turns?):/.exec(event.url || "")?.[1] });
+    });
+  }
+
+  event(type, detail = {}) {
+    this.state.elapsed_ms = Date.now() - this.startedAt;
+    this.state.ice_state = this.peer.iceConnectionState;
+    this.state.gathering_state = this.peer.iceGatheringState;
+    this.state.connection_state = this.peer.connectionState;
+    this.state.signaling_state = this.peer.signalingState;
+    this.state.pending_candidates = this.session.pendingCandidates.length;
+    this.state.rejected_candidates = this.session.rejectedCandidates;
+    this.state.events.push({ at_ms: this.state.elapsed_ms, type, ...detail,
+      ice_state: this.state.ice_state, gathering_state: this.state.gathering_state });
+    if (this.state.events.length > 128) this.state.events.shift();
+  }
+
+  candidate(side, candidate) {
+    if (!candidate) return this.event(`${side}_gathering_complete`);
+    const summary = { at_ms: Date.now() - this.startedAt, ...describeIceCandidate(candidate) };
+    const list = this.state[`${side}_candidates`];
+    if (list.length < 128) list.push(summary);
+    const key = `first_${side}_${summary.type}_ms`;
+    if (this.state[key] === undefined) this.state[key] = summary.at_ms;
+  }
+
+  sample(stats) {
+    const pair = selectedIcePair(stats);
+    const local = pair && stats.get(pair.localCandidateId);
+    const remote = pair && stats.get(pair.remoteCandidateId);
+    const route = local?.candidateType === "relay" || remote?.candidateType === "relay"
+      ? "relay" : local && remote ? "direct" : "unknown";
+    this.state.elapsed_ms = Date.now() - this.startedAt;
+    this.state.pending_candidates = this.session.pendingCandidates.length;
+    this.state.rejected_candidates = this.session.rejectedCandidates;
+    if (this.state.route !== route) {
+      this.state.route = route;
+      this.event("route", { route });
+    }
+    if (route !== "unknown" && !this.state.first_route) {
+      this.state.first_route = route;
+      this.state.first_route_ms = this.state.elapsed_ms;
+    }
+    if (this.state.elapsed_ms >= 30000 && this.state.route_at_30s === null)
+      this.state.route_at_30s = route;
+    const pairs = [];
+    stats.forEach(report => {
+      if (report.type !== "candidate-pair" || pairs.length >= 128) return;
+      pairs.push({ state: report.state, nominated: report.nominated, selected: report === pair,
+        local: describeIceCandidate(stats.get(report.localCandidateId)),
+        remote: describeIceCandidate(stats.get(report.remoteCandidateId)),
+        requests_sent: report.requestsSent, responses_received: report.responsesReceived,
+        rtt_ms: Number.isFinite(report.currentRoundTripTime) ? Math.round(report.currentRoundTripTime * 1000) : undefined });
+    });
+    this.state.candidate_pairs = pairs;
+  }
+}
 
 // The desktop/mobile wire format: quality 0/1/2, preference 0/1/2.
 // Match mobile choices, with quality priority and 30 fps as Web defaults.
@@ -267,6 +480,7 @@ class BrowserQosSession {
     try {
       const stats = await this.peer.getStats();
       if (this.closed || this.peer !== pc) return;
+      this.peer.crossdeskIceDiagnostics?.sample(stats);
       const next = new Map();
       let packets = 0, lost = 0, jitterMs = 0, decodeMs = 0, fps = 0;
       let frozen = false, sampled = false, rttMs = 0, pair = null;
@@ -505,6 +719,9 @@ function isPlainObject(value) {
 }
 
 function getIceServers() {
+  // A negotiated list is authoritative, including an intentionally empty list.
+  // Its freshness is checked before creating the peer, not during an active call.
+  if (connectionSession?.iceConfig) return connectionSession.iceConfig.iceServers;
   const configuredServers = Array.isArray(CONFIG.iceServers)
     ? CONFIG.iceServers.slice()
     : [];
@@ -827,6 +1044,7 @@ function startIceDisconnectedTimeout(peer) {
 
 function failConnection(message) {
   if (!isConnectionSessionActive) return;
+  pc?.crossdeskIceDiagnostics?.event("failure");
   disconnect();
   setConnectionFeedback(message, "error");
 }
@@ -835,6 +1053,8 @@ function handleSignalingMessage(message) {
   if (!isPlainObject(message) || typeof message.type !== "string") {
     return;
   }
+  if (["offer", "new_candidate_mid", "user_join_transmission"].includes(message.type) &&
+      !isCurrentSessionMessage(message)) return;
 
   // login, user_join_transmission, and offer may all carry a freshly issued
   // credential. Applying it here guarantees offer handling sees it first.
@@ -844,7 +1064,8 @@ function handleSignalingMessage(message) {
     case "session_ticket":
       if (["transmission_id", "host_id", "guest_id", "token"].every(key =>
           typeof message[key] === "string") && message.token.length === 64 &&
-          message.guest_id === clientId) {
+          message.guest_id === clientId && connectionSession &&
+          message.transmission_id === connectionSession.transmissionId) {
         sessionTicket = message;
       }
       break;
@@ -890,7 +1111,21 @@ function handleSignalingMessage(message) {
         failConnection("连接失败，请稍后重试");
         break;
       }
-      handleOffer({ type: "offer", sdp: message.sdp });
+      connectionSession.iceConfig = null;
+      if (Object.prototype.hasOwnProperty.call(message, "ice")) {
+        const config = turnCredentials?.parseIceConfiguration?.(message.ice);
+        if (!config) {
+          failConnection("连接配置无效或已过期，请重试");
+          break;
+        }
+        connectionSession.iceConfig = config;
+      }
+      try {
+        handleOffer({ type: "offer", sdp: message.sdp });
+      } catch (err) {
+        console.error("Failed to create peer connection", err.name);
+        failConnection("连接失败，请检查连接配置后重试");
+      }
       break;
     case "turn_credentials":
       if (message.status !== "success") {
@@ -901,33 +1136,7 @@ function handleSignalingMessage(message) {
       }
       break;
     case "new_candidate_mid":
-      if (!pc) return;
-      if (typeof message.candidate !== "string" || message.candidate.length === 0) {
-        console.warn("Invalid ICE candidate message: missing candidate");
-        break;
-      }
-      const candidateInit = {
-        candidate: message.candidate,
-      };
-      if (typeof message.mid === "string" && message.mid.length > 0) {
-        candidateInit.sdpMid = message.mid;
-      }
-      if (
-        Number.isInteger(message.sdpMLineIndex) &&
-        message.sdpMLineIndex >= 0
-      ) {
-        candidateInit.sdpMLineIndex = message.sdpMLineIndex;
-      }
-      if (
-        typeof candidateInit.sdpMid !== "string" &&
-        !Number.isInteger(candidateInit.sdpMLineIndex)
-      ) {
-        console.warn("Invalid ICE candidate message: missing mid and sdpMLineIndex");
-        break;
-      }
-      pc.addIceCandidate(
-        new RTCIceCandidate(candidateInit)
-      ).catch((err) => console.error("Error adding ICE candidate", err));
+      receiveRemoteIceCandidate(message);
       break;
     default:
       break;
@@ -975,7 +1184,16 @@ function sendLogin() {
 connectSignaling(false);
 
 function handleOffer(offer) {
+  const remoteUfrags = iceUfrags(offer.sdp);
   if (pc) {
+    for (const ufrag of pc.crossdeskRemoteUfrags) {
+      if (!remoteUfrags.has(ufrag)) connectionSession.retiredUfrags.add(ufrag);
+    }
+    while (connectionSession.retiredUfrags.size > 64)
+      connectionSession.retiredUfrags.delete(connectionSession.retiredUfrags.values().next().value);
+    // Untagged candidates from a previous peer cannot safely cross generations.
+    connectionSession.pendingCandidates = connectionSession.pendingCandidates.filter(entry =>
+      entry.init.usernameFragment && !connectionSession.retiredUfrags.has(entry.init.usernameFragment));
     teardownPeerConnection();
     trackIndex = 0;
     trackMap.clear();
@@ -985,9 +1203,14 @@ function handleOffer(offer) {
   }
   const peer = createPeerConnection();
   pc = peer;
+  peer.crossdeskRemoteUfrags = remoteUfrags;
+  peer.crossdeskQos.start();
   peer.setRemoteDescription(offer)
     .then(() => {
       if (!isConnectionSessionActive || peer !== pc) return;
+      peer.crossdeskRemoteDescriptionReady = true;
+      peer.crossdeskIceDiagnostics.event("remote_description");
+      flushRemoteIceCandidates(peer);
       return sendAnswer(peer);
     })
     .catch((err) => {
@@ -1004,6 +1227,14 @@ function createPeerConnection() {
   };
 
   const peer = new RTCPeerConnection(config);
+  peer.crossdeskSession = connectionSession;
+  connectionSession.generation++;
+  peer.crossdeskRemoteUfrags = new Set();
+  peer.crossdeskCandidateKeys = new Set();
+  peer.crossdeskCandidateChain = Promise.resolve();
+  peer.crossdeskPendingCandidateAdds = 0;
+  peer.crossdeskRemoteDescriptionReady = false;
+  peer.crossdeskIceDiagnostics = new BrowserIceDiagnostics(peer);
   peer.crossdeskVideoSettings = new BrowserVideoSettings(peer);
   const qos = new BrowserQosSession(peer);
   peer.crossdeskQos = qos;
@@ -1011,6 +1242,8 @@ function createPeerConnection() {
   peer.addEventListener("iceconnectionstatechange", () => {
     if (peer !== pc) return;
     const state = peer.iceConnectionState;
+    peer.crossdeskIceDiagnostics.event("iceconnectionstatechange");
+    void qos.sample();
     // Update status LED: connected when ICE state is "connected"
     const isConnected = state === "connected" || state === "completed";
     updateStatusLed(elements.connectionStatusLed, isConnected, true);
@@ -1049,15 +1282,23 @@ function createPeerConnection() {
   updateStatusLed(elements.connectedStatusLed, isConnected, false);
 
   peer.onicecandidate = ({ candidate }) => {
-    if (!isConnectionSessionActive || peer !== pc || !candidate) return;
+    if (!isConnectionSessionActive || peer !== pc) return;
+    peer.crossdeskIceDiagnostics.candidate("local", candidate?.candidate);
+    // An empty candidate marks the end of a generation and is forwarded;
+    // null only signals that all transports have finished gathering.
+    if (!candidate) return;
+    const session = peer.crossdeskSession;
+    const ufrag = candidate.usernameFragment || iceUfrags(peer.localDescription?.sdp).values().next().value;
     sendSignaling(
       {
         type: "new_candidate_mid",
-        transmission_id: getTransmissionId(),
-        user_id: clientId,
-        remote_user_id: getTransmissionId(),
+        transmission_id: session.transmissionId,
+        user_id: session.userId,
+        remote_user_id: session.transmissionId,
         candidate: candidate.candidate,
         mid: candidate.sdpMid,
+        ...(Number.isInteger(candidate.sdpMLineIndex) ? { sdpMLineIndex: candidate.sdpMLineIndex } : {}),
+        ...(ufrag ? { ufrag } : {}),
       },
       {
         label: "new_candidate_mid",
@@ -1215,15 +1456,15 @@ async function sendAnswer(peer) {
   await peer.setLocalDescription(answer);
   if (!isConnectionSessionActive || peer !== pc) return;
 
-  // The desktop starts gathering after receiving our answer. Send it now;
+  // Older desktops start gathering after receiving our answer. Send it now;
   // onicecandidate trickles candidates as they arrive, even if a STUN/TURN
   // server is slow or unreachable. The overall connection timeout still applies.
   const sent = sendSignaling(
     {
       type: "answer",
-      transmission_id: getTransmissionId(),
-      user_id: clientId,
-      remote_user_id: getTransmissionId(),
+      transmission_id: peer.crossdeskSession.transmissionId,
+      user_id: peer.crossdeskSession.userId,
+      remote_user_id: peer.crossdeskSession.transmissionId,
       sdp: peer.localDescription.sdp,
     },
     {
@@ -1236,6 +1477,7 @@ async function sendAnswer(peer) {
   if (!sent) {
     throw new Error("Failed to send answer");
   }
+  peer.crossdeskIceDiagnostics.event("answer_sent");
 }
 
 function getTransmissionId() {
@@ -1266,7 +1508,7 @@ function sendLeaveRequest() {
     {
       type: "user_leave_transmission",
       user_id: clientId,
-      transmission_id: getTransmissionId(),
+      transmission_id: connectionSession?.transmissionId || getTransmissionId(),
     },
     {
       label: "user_leave_transmission",
@@ -1277,6 +1519,7 @@ function sendLeaveRequest() {
 
 function connect() {
   if (!elements.connectBtn || !elements.disconnectBtn || !elements.media) return;
+  if (isConnectionSessionActive) return;
   if (!validateConnectionForm()) {
     updateConnectAvailability();
     return;
@@ -1292,6 +1535,11 @@ function connect() {
   }
   clearConnectionFieldErrors();
   setConnectionFeedback();
+  connectionSession = {
+    id: ++connectionAttempt, transmissionId: getTransmissionId(), userId: clientId,
+    generation: 0, pendingCandidates: [], retiredUfrags: new Set(), rejectedCandidates: 0,
+  };
+  window.CrossDeskIceDiagnostics = null;
   isConnectionSessionActive = true;
   elements.connectBtn.style.display = "none";
   elements.disconnectBtn.style.display = "inline-block";
@@ -1349,6 +1597,7 @@ function disconnect() {
     console.warn("[CrossDesk] Skip leave_transmission: signaling unavailable during disconnect");
   }
   teardownPeerConnection();
+  connectionSession = null;
   enableDataChannelUi(false);
   // Reset track index and clear display select options
   trackIndex = 0;
@@ -1405,6 +1654,7 @@ function hideConnectingOverlayOnFirstFrame() {
 function teardownPeerConnection() {
   if (!pc) return;
 
+  pc.crossdeskIceDiagnostics?.event("closed");
   setAudioToggleVisible(false);
   pc.crossdeskQos?.close();
   pc.crossdeskVideoSettings?.close();

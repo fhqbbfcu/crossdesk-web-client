@@ -165,6 +165,10 @@ Configuration uses a shallow merge: omitted fields keep their defaults, while `i
 
 ### 3. Dynamic TURN credentials
 
+Newer signaling servers include a complete version-1 session configuration in the Offer's `ice` field. After validating its expiry, the browser uses all supplied STUN / TURN endpoints, **replacing local `iceServers` and legacy TURN credentials**. An empty list permits host candidates only; malformed or nearly expired lists require a retry. Configure backup STUN endpoints on the server so web and desktop clients use the same endpoints.
+
+The following applies to older servers that omit the `ice` field:
+
 Normally, configure only STUN in `iceServers`. The signaling service sends temporary TURN credentials during login and session negotiation. The browser validates them with [turn_credentials.js](turn_credentials.js), keeps them in memory, and adds UDP / TCP TURN URLs when creating a WebRTC connection.
 
 - Fields are `host`, `port`, `username`, `password`, and `expires_at` (Unix seconds). Expired credentials are not used for new connections.
@@ -178,7 +182,7 @@ Normally, configure only STUN in `iceServers`. The signaling service sends tempo
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `signalingUrl` | `wss://api.crossdesk.cn:9099` | Signaling endpoint |
-| `iceServers` | `[{ urls: ["stun:api.crossdesk.cn:3478"] }]` | Base ICE server list |
+| `iceServers` | `[{ urls: ["stun:api.crossdesk.cn:3478"] }]` | Base list for older servers without session ICE configuration |
 | `heartbeatIntervalMs` | `3000` | Heartbeat interval |
 | `heartbeatTimeoutMs` | `10000` | Heartbeat response timeout |
 | `reconnectDelayMs` | `2000` | Initial signaling retry delay, followed by exponential backoff |
@@ -210,6 +214,18 @@ All `Ms` values are in milliseconds. Interaction guards prevent browser actions 
 | No sound | Check that the host provides an active audio track, then the audio button, site playback permissions, and local volume |
 | Configuration changed but old server still used | Verify override script order and deployment completion; force-refresh and inspect the downloaded HTML / JS |
 | Wrong fork URL or home-screen launch path | Check Pages Custom domain, `CNAME`, publishing directory, and the manifest's `start_url` |
+
+### Diagnose direct connectivity
+
+Starting when an `RTCPeerConnection` is created, `window.CrossDeskIceDiagnostics` records ICE states, candidate types, IPv4 / IPv6 / mDNS families, connectivity check results, and STUN / TURN error codes in memory, even before video arrives. The last peer's diagnostics survive disconnection and reset on the next connection attempt. Inspect them in the browser developer console:
+
+```js
+JSON.stringify(window.CrossDeskIceDiagnostics, null, 2)
+```
+
+`first_route` is the first observed route; `route` is the current route; `route_at_30s` is the first route sampled at least 30 seconds after peer creation, or `null` if the connection ends earlier. `candidate_pairs` helps distinguish missing candidates, failed checks, and relay selection. Diagnostics exclude device IDs, candidate IP addresses, full SDP, and credentials, and are not uploaded automatically. Candidate and event lists are bounded. Compare repeated connections on the same devices and networks to measure direct-connect rates.
+
+The web client buffers candidates arriving before the Offer or remote description and uses session identifiers and `ufrag` to isolate generations. Legacy servers may omit these fields; untagged stale messages from the same device cannot be fully distinguished. Updated hosts also gather candidates immediately after sending the Offer and offer ICE-TCP direct candidates. These host changes require rebuilding the desktop client and MiniRTC.
 
 <a id="development"></a>
 
