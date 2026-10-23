@@ -81,7 +81,7 @@
     <!-- PWA Manifest (可选，用于更好的Web App体验) -->
     <link rel="manifest" href="manifest.json" />
 
-    <link rel="stylesheet" href="styles.css?v=2026.10.17.1" />
+    <link rel="stylesheet" href="styles.css?v=2026.10.23.3" />
     <script
       src="vendor/adapter-9.0.1.min.js"
       onload="console.info('[CrossDesk] Loaded WebRTC adapter from local: vendor/adapter-9.0.1.min.js');"
@@ -200,6 +200,7 @@
                   <button type="button" id="session-video" class="session-tile" data-page="video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"/><circle cx="8" cy="5" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="19" r="2"/></svg><span id="session-video-label">画面设置</span></button>
                   <button type="button" id="audio-toggle" class="session-tile" disabled aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4H4Z"/><path class="audio-icon-volume" d="M16 9a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12"/><path class="audio-icon-mute" d="m17 9 5 6m0-6-5 6"/></svg><span id="audio-toggle-label">静音</span></button>
                   <button type="button" id="session-network" class="session-tile" data-page="network"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v18h17M8 16v-4m5 4V8m5 8V5"/></svg><span id="session-network-label">网络状态</span></button>
+                  <button type="button" id="session-files" class="session-tile" data-page="files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H5v20h14V7Z M14 2v5h5 M8 12h8m-3-3 3 3-3 3 M16 18H8m3-3-3 3 3 3"/></svg><span id="session-files-label">文件传输</span></button>
                 </div>
                 <div data-session-page="video" hidden>
                   <fieldset><legend>画面质量</legend><div class="session-segments"><button type="button" data-setting="quality" data-value="0" aria-pressed="false" disabled>低</button><button type="button" data-setting="quality" data-value="1" aria-pressed="false" disabled>中</button><button type="button" data-setting="quality" data-value="2" aria-pressed="false" disabled>高</button></div></fieldset>
@@ -219,8 +220,18 @@
                   <dl class="session-network"><div><dt>分辨率</dt><dd id="network-resolution">—</dd></div><div><dt>帧率</dt><dd id="network-fps">—</dd></div><div><dt>视频接收速率</dt><dd id="network-bitrate">—</dd></div><div><dt>视频丢包率</dt><dd id="network-loss">—</dd></div><div><dt>往返延迟</dt><dd id="network-rtt">—</dd></div><div><dt>画面缓冲</dt><dd id="network-buffer">—</dd></div><div><dt>解码耗时</dt><dd id="network-decode">—</dd></div><div><dt>连接方式</dt><dd id="network-route">—</dd></div></dl>
                   <p id="connected-client-version" class="client-version" aria-label="Web 客户端版本" hidden></p>
                 </div>
+                <div data-session-page="files" hidden>
+                  <p id="file-transfer-status" class="session-detail" role="status" aria-live="polite">等待文件通道连接…</p>
+                  <button id="file-transfer-select" type="button" disabled>选择文件并发送</button>
+                  <input id="file-transfer-input" type="file" multiple hidden>
+                  <p id="file-transfer-storage" class="session-detail">接收文件边传输边保存到浏览器下载目录。</p>
+                  <p id="file-transfer-feedback" class="session-feedback" role="status" aria-live="polite"></p>
+                  <ul id="file-transfer-list" aria-label="文件传输记录"></ul>
+                  <p id="file-transfer-empty" class="session-detail">暂无传输记录</p>
+                </div>
                 <div data-session-page="disconnect" hidden>
                   <p>确定断开当前远程连接？</p>
+                  <p class="session-detail">进行中的传输和下载将停止；已下载完成的文件会保留。</p>
                   <div class="session-confirm-actions">
                     <button id="session-disconnect-cancel" type="button">取消</button>
                     <button id="session-disconnect-confirm" class="session-danger" type="button">断开连接</button>
@@ -335,9 +346,11 @@
     </div>
 
 
-    <script src="control.js?v=2026.10.17.1"></script>
-    <script src="turn_credentials.js?v=2026.10.17.1"></script>
-    <script src="web_client.js?v=2026.10.17.1"></script>
-    <script src="session_controls.js?v=2026.10.17.1"></script>
+    <script src="control.js?v=2026.10.23.3"></script>
+    <script src="turn_credentials.js?v=2026.10.23.3"></script>
+    <script src="file_download.js?v=2026.10.23.3"></script>
+    <script src="file_transfer.js?v=2026.10.23.3"></script>
+    <script src="web_client.js?v=2026.10.23.3"></script>
+    <script src="session_controls.js?v=2026.10.23.3"></script>
   </body>
 </html>

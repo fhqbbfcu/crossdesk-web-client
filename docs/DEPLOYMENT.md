@@ -53,6 +53,9 @@ styles.css
 web_client.js
 control.js
 turn_credentials.js
+file_download.js
+file_download_sw.js
+file_transfer.js
 session_controls.js
 vendor/adapter-9.0.1.min.js
 icons/
@@ -62,7 +65,7 @@ manifest.json
 
 该站点只提供静态资源，WSS 信令和 STUN / TURN 由 CrossDesk Server 与 Coturn 提供。如果为 WSS 设置反向代理，需要支持 WebSocket 升级，并与 `signalingUrl` 的实际路径对应。
 
-**自定义域名或子路径：** [index.html](../index.html) 的 canonical、社交分享和结构化数据，以及 [robots.txt](../robots.txt) / [sitemap.xml](../sitemap.xml) 都包含官方站点地址，发布自己的站点时应同步调整。[manifest.json](../manifest.json) 当前 `start_url` 为 `/`；部署到 `/crossdesk-web-client/` 等子路径时，改为 `./` 或实际站点路径，以免从主屏幕启动时进入域名根目录。仓库未注册 Service Worker，添加到主屏幕不代表支持离线远控。
+**自定义域名或子路径：** [index.html](../index.html) 的 canonical、社交分享和结构化数据，以及 [robots.txt](../robots.txt) / [sitemap.xml](../sitemap.xml) 都包含官方站点地址，发布自己的站点时应同步调整。[manifest.json](../manifest.json) 当前 `start_url` 为 `/`；部署到 `/crossdesk-web-client/` 等子路径时，改为 `./` 或实际站点路径，以免从主屏幕启动时进入域名根目录。文件接收使用同目录下的 Service Worker，只处理流式下载，不缓存站点资源；添加到主屏幕不代表支持离线远控。
 
 <a id="configuration"></a>
 
@@ -72,7 +75,7 @@ manifest.json
 
 先按 [CrossDesk Server 部署说明](https://github.com/kunkundi/crossdesk-server#运行服务) 启动信令服务和 Coturn，并设置被控桌面端使用该服务。
 
-默认地址在 [web_client.js](../web_client.js) 的 `DEFAULT_CONFIG` 中。需要覆盖时，将以下代码插入 [index.html](../index.html) 底部、**现有 `control.js` 脚本标签之前**。保留所有现有脚本及 `?v=` 参数；应用脚本的加载顺序应为 `control.js` → `turn_credentials.js` → `web_client.js` → `session_controls.js`。
+默认地址在 [web_client.js](../web_client.js) 的 `DEFAULT_CONFIG` 中。需要覆盖时，将以下代码插入 [index.html](../index.html) 底部、**现有 `control.js` 脚本标签之前**。保留所有现有脚本及 `?v=` 参数；应用脚本的加载顺序应为 `control.js` → `turn_credentials.js` → `file_download.js` → `file_transfer.js` → `web_client.js` → `session_controls.js`。
 
 ```html
 <script>
@@ -139,6 +142,8 @@ manifest.json
 | --- | --- |
 | [index.html](../index.html) / [styles.css](../styles.css) | 连接表单、远程画面与触控界面 |
 | [web_client.js](../web_client.js) | 信令、WebRTC、连接状态、音频和画面切换 |
+| [file_transfer.js](../file_transfer.js) | 文件通道协商、分块收发、确认流控及取消 |
+| [file_download.js](../file_download.js) / [file_download_sw.js](../file_download_sw.js) | 以带背压的下载流交给浏览器，沿用默认下载目录及保存设置 |
 | [session_controls.js](../session_controls.js) | 悬浮菜单、画面设置、网络状态、显示器选择与断开确认 |
 | [control.js](../control.js) | 控制协议、物理 / 虚拟键鼠、鼠标锁定与触控缩放 |
 | [turn_credentials.js](../turn_credentials.js) | 动态 TURN 凭据校验与 ICE 配置生成 |
@@ -156,9 +161,22 @@ node --test tests/web_client_signaling_test.js
 node --check web_client.js
 node --check control.js
 node --check turn_credentials.js
+node --check file_download.js
+node --check file_download_sw.js
+node --check file_transfer.js
 node --check session_controls.js
 ```
 
 这些检查覆盖凭据解析、模拟触控事件、模拟 WebRTC 信令与脚本语法，不能替代真实设备上的连接、音视频和输入测试。修改连接或触控逻辑后，应使用同一服务上的桌面端验证直连 / TURN、画面切换、断开重连和对应输入设备。
 
 WebRTC Adapter 固定为 **9.0.1**：页面优先加载本地 `vendor/adapter-9.0.1.min.js`，失败时回退到同版本的 jsDelivr 地址。部署时保留 `vendor` 资源，版本更新时同时核对本地文件与 [index.html](../index.html) 中的回退地址。
+
+## 文件传输互通要求
+
+Web 文件传输需要桌面端使用支持将已注册文件流映射为 WebRTC DataChannel 的 MiniRTC，并重新构建桌面端。仅发布网页无法让旧桌面端接收文件；网页会在文件通道未就绪时禁用发送并提示更新。服务器无需增加文件上传接口，文件通过当前会话的 WebRTC 数据通道传输。
+
+文件通道与 PC 端共用 `AddDataStream("file", true)` 和 `AddDataStream("file_feedback", true)` 注册信息。被控端建立 WebRTC 连接时，直接为这两个已注册文件流创建 DataChannel，可靠性沿用注册配置，协议标识为 `crossdesk-file-v1`，收到的二进制数据交给已有桌面端文件收发逻辑。不再使用额外的 `file_transfer_version` 字段，也不依赖 `web_qos_hello`；该握手仅用于原有输入与 QoS 能力。浏览器在两个文件通道就绪后启用传输，等待超时则提示升级被控端。PC 原生传输仍使用原有底层传输，文件格式、通道名称及上层处理保持共用。
+
+二进制数据沿用 CrossDesk 的小端 31 字节文件头和 28 字节确认包。Web 发送按块读取，最多保留 1 MiB 未确认数据，只有收到完成确认才显示发送完成。接收文件自动进入浏览器下载管理器，边接收边写入默认下载目录，无需选择接收目录或点击保存，不再限制为 256 MiB。接收队列上限为 8 MiB；下载流按块确认并施加背压，页面不缓存整个文件。界面完成表示数据已交付浏览器，请在下载列表中确认最终保存结果。断开或刷新会中止未完成的传输，完成的下载不受影响。不支持断点续传或目录传输。
+
+流式接收要求支持 Service Worker 的浏览器及 HTTPS 或 localhost；`file://` 和普通远程 HTTP 页面不能接收。`file_download_sw.js` 必须与入口页面部署在同一目录，以 JavaScript MIME 类型返回，不可被 SPA 回退页替代。Worker URL 沿用 `file_download.js` 的版本参数，发布时需同步上传两个文件。浏览器若开启“每次询问保存位置”或多文件下载权限提示，仍按浏览器设置执行。下载被拦截或取消时传输会失败，请允许下载后重试。

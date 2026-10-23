@@ -9,7 +9,7 @@
   if (!orb || !panel || !shield || !control || !session) return;
   const clamp = (n, min, max) => Math.max(min, Math.min(n, Math.max(min, max)));
   const pageTitles = { main: "远程控制", video: "画面设置", network: "网络状态",
-    display: "显示器", disconnect: "断开连接" };
+    display: "显示器", files: "文件传输", disconnect: "断开连接" };
   const preferenceDetails = [
     "优先保持画面流畅，带宽或编码压力较大时会更积极地降低分辨率。",
     "优先保持较高分辨率，带宽不足时先降低帧率，保持画面清晰。",
@@ -27,9 +27,11 @@
       this.mouseVisible = false;
       this.drag = null;
       this.suppressClick = false;
+      this.fileRows = new Map();
       this.bindEvents();
       this.renderSettings(null);
       this.setConnected(false);
+      this.renderFiles(window.CrossDeskFiles);
     }
 
     // Fixed overlays use the visual viewport so browser chrome, zoom and safe
@@ -142,9 +144,15 @@
       byId("disconnect-connected").hidden = page === "disconnect";
       panel.querySelectorAll("[data-session-page]").forEach(el => el.hidden = el.dataset.sessionPage !== page);
       if (page === "disconnect") control.hideVirtualKeyboard();
+      if (page === "files") {
+        // Native pickers and downloads need the browser's regular pointer.
+        if (document.pointerLockElement) document.exitPointerLock?.();
+        orb.classList.remove("has-file-updates");
+      }
       this.updateMouse();
       this.renderSettings(window.CrossDeskVideoSettings);
       this.renderNetwork(window.CrossDeskStats);
+      this.renderFiles(window.CrossDeskFiles);
       (page === "disconnect" ? byId("session-disconnect-cancel") : byId("session-menu-close")).focus({ preventScroll: true });
     }
 
@@ -196,6 +204,70 @@
           : stats?.route === "direct" ? "直连" : "—",
       };
       for (const [key, value] of Object.entries(values)) byId(`network-${key}`).textContent = value;
+      this.layout();
+    }
+
+    renderFiles(files) {
+      const format = bytes => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024
+        ? `${(bytes / 1024).toFixed(1)} KiB` : bytes < 1024 * 1024 * 1024
+        ? `${(bytes / (1024 * 1024)).toFixed(1)} MiB` : `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+      const labels = { queued: "排队中", sending: "发送中", receiving: "接收中", saving: "正在保存",
+        completed: "已完成", cancelled: "已取消", failed: "失败" };
+      const items = files?.items || [], list = byId("file-transfer-list");
+      if (!items.length) orb.classList.remove("has-file-updates");
+      const busy = items.filter(item => ["queued", "sending", "receiving", "saving"].includes(item.status)).length;
+      byId("session-files-label").textContent = busy ? `文件传输 (${busy})` : "文件传输";
+      byId("file-transfer-select").disabled = !files?.ready;
+      byId("file-transfer-storage").textContent = !files || files.canWriteFiles
+        ? "接收文件边传输边保存到浏览器下载目录。保存位置沿用浏览器设置。"
+        : "当前页面无法流式接收，请使用支持 Service Worker 的浏览器，通过 HTTPS 或 localhost 打开；仍可发送文件。";
+      byId("file-transfer-status").textContent = files?.ready ? "已连接，可与远端互传文件。"
+        : files?.state === "unsupported" ? "被控端暂不支持与 Web 控制端传输文件，请升级被控端客户端。"
+        : files?.state === "closed" ? "文件通道已断开，请重新连接。" : "等待文件通道连接…";
+      byId("file-transfer-feedback").textContent = files?.error || "";
+      byId("file-transfer-empty").hidden = items.length > 0;
+      for (const [item, row] of this.fileRows) if (!items.includes(item)) {
+        row.element.remove();
+        this.fileRows.delete(item);
+      }
+      for (const item of items) {
+        let row = this.fileRows.get(item);
+        if (!row) {
+          const element = document.createElement("li");
+          element.className = "file-transfer-item";
+          const name = document.createElement("strong"), detail = document.createElement("p");
+          name.textContent = item.name;
+          const progress = document.createElement("progress");
+          progress.max = 1;
+          progress.setAttribute("aria-label", `${item.name} 传输进度`);
+          const actions = document.createElement("div");
+          actions.className = "file-transfer-actions";
+          const cancel = document.createElement("button"), remove = document.createElement("button");
+          cancel.type = remove.type = "button";
+          cancel.textContent = "取消";
+          remove.textContent = "×";
+          remove.setAttribute("aria-label", "移除");
+          remove.title = "移除";
+          cancel.addEventListener("click", () => files.cancel(item));
+          remove.addEventListener("click", () => files.remove(item));
+          actions.append(cancel, remove);
+          element.append(name, detail, progress, actions);
+          list.append(element);
+          row = { element, detail, progress, cancel, remove, status: null };
+          this.fileRows.set(item, row);
+        }
+        if (item.direction === "receive" && row.status !== item.status &&
+            (panel.hidden || this.page !== "files") && ["receiving", "completed"].includes(item.status))
+          orb.classList.add("has-file-updates");
+        row.status = item.status;
+        const running = ["queued", "sending", "receiving", "saving"].includes(item.status);
+        row.detail.textContent = `${item.direction === "send" ? "发送" : "接收"} · ${labels[item.status]} · ${format(item.bytes)} / ${format(item.total)}${item.detail ? " · " + item.detail : ""}`;
+        row.progress.value = item.status === "completed" ? 1 : item.total ? item.bytes / item.total : 0;
+        row.cancel.hidden = !running;
+        row.remove.hidden = running;
+      }
+      orb.setAttribute("aria-label", orb.classList.contains("has-file-updates")
+        ? "远程控制菜单，有新接收文件" : "远程控制菜单");
       this.layout();
     }
 
@@ -271,6 +343,19 @@
       shield.addEventListener("click", () => this.close());
       byId("session-menu-close").addEventListener("click", () => this.close());
       byId("session-menu-back").addEventListener("click", () => this.showPage("main"));
+      byId("file-transfer-select").addEventListener("click", () => {
+        if (!window.CrossDeskFiles?.ready) return;
+        control.cancelLocalInput();
+        this.filePickerSession = window.CrossDeskFiles;
+        byId("file-transfer-input").click();
+      });
+      byId("file-transfer-input").addEventListener("change", event => {
+        // A picker can outlive a disconnect or a connection to another host.
+        if (this.filePickerSession === window.CrossDeskFiles)
+          this.filePickerSession?.enqueue(Array.from(event.target.files || []));
+        this.filePickerSession = null;
+        event.target.value = "";
+      });
       panel.querySelectorAll("[data-page]").forEach(button => button.addEventListener("click", () => this.showPage(button.dataset.page)));
       panel.querySelectorAll("[data-setting]").forEach(button => button.addEventListener("click", () => {
         const settings = window.CrossDeskVideoSettings;
@@ -300,7 +385,7 @@
           event.preventDefault();
           this.page === "main" ? this.close() : this.showPage("main");
         } else if (event.key === "Tab") {
-          const buttons = [...panel.querySelectorAll("button:not(:disabled), select:not(:disabled)")].filter(el => el.getClientRects().length);
+          const buttons = [...panel.querySelectorAll("button:not(:disabled), select:not(:disabled), a[href]")].filter(el => el.getClientRects().length);
           const i = buttons.indexOf(document.activeElement), next = (i + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length;
           event.preventDefault(); buttons[next]?.focus();
         }

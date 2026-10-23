@@ -58,6 +58,19 @@ The touch layout uses the browser's pointer and hover capabilities, not screen s
 
 These controls use [session_controls.js](../session_controls.js), which loads after `web_client.js`. Keep it in manual deployments.
 
+### File transfer
+
+1. Open **文件传输 (File transfer)** from the floating menu. The desktop must include MiniRTC support for web file channels; older hosts display an update notice and leave sending disabled.
+2. Click **选择文件并发送 (Select files and send)** to queue one or more files. Progress reflects bytes acknowledged by the host; completion requires its final acknowledgment. Files go to the desktop's configured receive directory (Desktop by default).
+3. When the host sends to this web session, the file automatically streams to the browser’s default download location, without a directory picker or Save button. A blue dot appears on the floating icon; open File transfer to see progress. Download names are sanitized, and the browser handles duplicate filenames.
+4. Use **取消 (Cancel)** for queued or active transfers and **× (Remove)** for finished records. Transfers fail after 30 seconds without progress and must be sent again.
+
+The **256 MiB** receive limit is removed. The page processes chunks without buffering entire files; actual capacity depends on the browser and available disk space. Up to 100 records are retained. Removing a record does not delete a completed download. Folder transfers and resume are not supported.
+
+Open the page over **HTTPS or localhost** with a browser that supports Service Workers. Opening the HTML directly (`file://`) cannot stream received files. If the browser asks where to save each download, that setting still applies. Multiple downloads may require allowing downloads for this site. If a download is blocked or cancelled, allow downloads and send the file again.
+
+**Disconnecting, reconnecting, or refreshing stops active transfers and downloads; completed downloads remain.** Completion in the page means the bytes have been handed to the browser. Check the browser download list for the final save result.
+
 <a id="troubleshooting"></a>
 
 ## Troubleshooting
