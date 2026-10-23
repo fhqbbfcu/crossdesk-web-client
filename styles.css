@@ -649,11 +649,13 @@ video {
 #file-transfer-select { width: 100%; }
 #file-transfer-list { list-style: none; margin: 0; padding: 0; }
 .file-transfer-item { border-top: 1px solid #e0e2e8; padding: 12px 0; }
-.file-transfer-item strong { display: block; font-size: 12px; overflow-wrap: anywhere; }
+.file-transfer-header { display: flex; align-items: center; gap: 8px; }
+.file-transfer-header strong { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connected-panel .file-transfer-remove { flex: 0 0 24px; width: 24px; height: 24px; padding: 0; font-size: 16px; line-height: 1; }
 .file-transfer-item p { margin: 5px 0; font-size: 11px; color: #626772; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .file-transfer-item progress { display: block; width: 100%; height: 6px; margin: 8px 0; accent-color: #1262b3; }
 .file-transfer-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.file-transfer-actions [hidden] { display: none; }
+.file-transfer-item [hidden] { display: none; }
 #panel-collapsed-bar.has-file-updates::after { content: ""; position: absolute; right: 3px; top: 3px; width: 10px; height: 10px; border: 2px solid #fff; border-radius: 50%; background: #1262b3; }
 
 /* The mouse bar follows the orb and yields its space while the menu is open. */

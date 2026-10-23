@@ -221,7 +221,8 @@
       byId("file-transfer-storage").textContent = !files || files.canWriteFiles
         ? "接收文件边传输边保存到浏览器下载目录。保存位置沿用浏览器设置。"
         : "当前页面无法流式接收，请使用支持 Service Worker 的浏览器，通过 HTTPS 或 localhost 打开；仍可发送文件。";
-      byId("file-transfer-status").textContent = files?.ready ? "已连接，可与远端互传文件。"
+      byId("file-transfer-status").hidden = !!files?.ready;
+      byId("file-transfer-status").textContent = files?.ready ? ""
         : files?.state === "unsupported" ? "被控端暂不支持与 Web 控制端传输文件，请升级被控端客户端。"
         : files?.state === "closed" ? "文件通道已断开，请重新连接。" : "等待文件通道连接…";
       byId("file-transfer-feedback").textContent = files?.error || "";
@@ -235,8 +236,11 @@
         if (!row) {
           const element = document.createElement("li");
           element.className = "file-transfer-item";
+          const header = document.createElement("div");
+          header.className = "file-transfer-header";
           const name = document.createElement("strong"), detail = document.createElement("p");
           name.textContent = item.name;
+          name.title = item.name;
           const progress = document.createElement("progress");
           progress.max = 1;
           progress.setAttribute("aria-label", `${item.name} 传输进度`);
@@ -245,15 +249,17 @@
           const cancel = document.createElement("button"), remove = document.createElement("button");
           cancel.type = remove.type = "button";
           cancel.textContent = "取消";
+          remove.className = "file-transfer-remove";
           remove.textContent = "×";
           remove.setAttribute("aria-label", "移除");
           remove.title = "移除";
           cancel.addEventListener("click", () => files.cancel(item));
           remove.addEventListener("click", () => files.remove(item));
-          actions.append(cancel, remove);
-          element.append(name, detail, progress, actions);
+          header.append(name, remove);
+          actions.append(cancel);
+          element.append(header, detail, progress, actions);
           list.append(element);
-          row = { element, detail, progress, cancel, remove, status: null };
+          row = { element, detail, progress, actions, cancel, remove, status: null };
           this.fileRows.set(item, row);
         }
         if (item.direction === "receive" && row.status !== item.status &&
@@ -263,6 +269,7 @@
         const running = ["queued", "sending", "receiving", "saving"].includes(item.status);
         row.detail.textContent = `${item.direction === "send" ? "发送" : "接收"} · ${labels[item.status]} · ${format(item.bytes)} / ${format(item.total)}${item.detail ? " · " + item.detail : ""}`;
         row.progress.value = item.status === "completed" ? 1 : item.total ? item.bytes / item.total : 0;
+        row.actions.hidden = !running;
         row.cancel.hidden = !running;
         row.remove.hidden = running;
       }
